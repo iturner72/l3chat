@@ -1,4 +1,15 @@
 pub mod app;
+pub mod auth;
+#[cfg(feature = "ssr")]
+pub mod cancellable_sse;
+pub mod components;
+pub mod embedding_service;
+pub mod embeddings_service;
+pub mod handlers;
+pub mod server_fn;
+pub mod state;
+pub mod supabase;
+pub mod types;
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]

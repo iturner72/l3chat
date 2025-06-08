@@ -1,0 +1,52 @@
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+html {
+    background-color: rgb(4, 16, 16)
+}
+
+.translate_y_neg_4 {
+    transform: translateY(-1rem);
+}
+.translate_y_0 {
+    transform: translateY(0);
+}
+
+.message-container {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.message-container span {
+    display: inline;
+}
+
+.poast-details p {
+    display: -webkit-box;
+    -webkit-line-clamp: 7;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ir {
+  font-family: "Inter Tight", sans-serif;
+  font-optical-sizing: auto;
+  font-weight: 400;
+  font-style: normal;
+}
+
+.ib {
+  font-family: "Inter Tight", sans-serif;
+  font-optical-sizing: auto;
+  font-weight: 700;
+  font-style: normal;
+}
+
+.ii {
+  font-family: "Inter Tight", sans-serif;
+  font-optical-sizing: auto;
+  font-weight: 400;
+  font-style: italic;
+}
