@@ -3,9 +3,14 @@ pub mod auth;
 #[cfg(feature = "ssr")]
 pub mod cancellable_sse;
 pub mod components;
+pub mod database;
 pub mod embedding_service;
 pub mod embeddings_service;
 pub mod handlers;
+pub mod models;
+pub mod pages;
+#[cfg(feature = "ssr")]
+pub mod schema;
 pub mod server_fn;
 pub mod state;
 pub mod supabase;

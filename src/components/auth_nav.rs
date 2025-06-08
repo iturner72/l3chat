@@ -25,6 +25,12 @@ pub fn AuthNav() -> impl IntoView {
 
     view! {
         <div class="items-end pr-4 flex space-x-4">
+            <a
+                href="/writersroom"
+                class="text-2xl text-teal-600 dark:text-mint-400 hover:text-teal-800 dark:hover:text-mint-300"
+            >
+                "yap"
+            </a>
             {move || {
                 if is_checking() {
                     view! { <span class="text-gray-400">"Loading..."</span> }.into_any()
@@ -60,7 +66,8 @@ pub fn AuthNav() -> impl IntoView {
                 rel="noopener noreferrer"
             >
                 "github"
-            </a> <DarkModeToggle />
+            </a>
+            <DarkModeToggle />
         </div>
     }
 }

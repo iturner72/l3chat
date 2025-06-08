@@ -4,12 +4,13 @@ cfg_if! {
     if #[cfg(feature = "ssr")] {
         use axum::{
             body::Body as AxumBody,
-            extract::State,
+            extract::{Query, State},
             http::Request,
             response::IntoResponse,
             routing::get,
             middleware,
             Router,
+            response::sse::Sse,
         };
         use dotenv::dotenv;
         use env_logger::Env;
@@ -19,10 +20,13 @@ cfg_if! {
         use l3chat::app::*;
         use l3chat::auth::server::middleware::require_auth;
         use l3chat::cancellable_sse::*;
+        use l3chat::components::chat::{SseStream, send_message_stream};
+        use l3chat::database::db::establish_connection;
         use l3chat::handlers::*;
+        use std::collections::HashMap;
         use std::net::SocketAddr;
         use std::sync::{Arc,Mutex};
-        use tokio::sync::broadcast;
+        use tokio::sync::{mpsc, broadcast};
 
         #[tokio::main]
         async fn main() {
@@ -34,11 +38,15 @@ cfg_if! {
             let addr = conf.leptos_options.site_addr;
             let leptos_options = conf.leptos_options;
 
+            let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+            let pool = establish_connection(&database_url).expect("Failed to create database pool");
+
             // Generate the list of routes in your Leptos App
             let routes = generate_route_list(App);
 
             let app_state = AppState {
                 leptos_options: leptos_options.clone(),
+                pool,
                 sse_state: SseState::new(),
                 drawing_tx: broadcast::Sender::new(100),
                 user_count: Arc::new(Mutex::new(0)),
@@ -62,6 +70,26 @@ cfg_if! {
                 .route("/api/cancel-stream", get(cancel_stream))
                 .route("/api/generate-embeddings", get(embeddings_generation_handler))
                 .route("/api/generate-local-embeddings", get(local_embeddings_generation_handler))
+                .route("/api/send_message_stream", axum::routing::get(|
+                    State(app_state): State<AppState>,
+                    Query(params): Query<HashMap<String, String>>
+                | async move {
+                    let (tx, rx) = mpsc::channel(1);
+                    if let (Some(thread_id), Some(model), Some(lab)) = (
+                        params.get("thread_id"),
+                        params.get("model"),
+                        params.get("lab")
+                    ) {
+                        let pool = app_state.pool.clone();
+                        let thread_id = thread_id.clone();
+                        let model = model.clone();
+                        let lab = lab.clone();
+                        tokio::spawn(async move {
+                            send_message_stream(&pool, thread_id, model, lab, tx).await;
+                        });
+                    }
+                    Sse::new(SseStream { receiver: rx })
+                }))
                 .layer(middleware::from_fn(require_auth));
 
             let app = Router::new()

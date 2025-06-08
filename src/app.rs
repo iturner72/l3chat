@@ -10,6 +10,7 @@ use crate::components::auth_nav::AuthNav;
 use crate::components::drawing::DrawingPage;
 use crate::components::footer::Footer;
 use crate::components::poasts::Poasts;
+use crate::pages::writersroom::WritersRoom;
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
@@ -45,6 +46,7 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("") view=HomePage />
                     <Route path=path!("admin") view=AdminLogin />
                     <Route path=path!("admin-panel") view=ProtectedAdminPanel />
+                    <Route path=path!("writersroom") view=WritersRoom />
                     <Route path=path!("draw") view=DrawingPage />
                 </Routes>
             </main>
