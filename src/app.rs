@@ -6,6 +6,7 @@ use leptos_router::{
 };
 
 use crate::auth::auth_components::{AdminLogin, ProtectedAdminPanel};
+use crate::auth::context::AuthProvider;
 use crate::components::auth_nav::AuthNav;
 use crate::components::drawing::DrawingPage;
 use crate::components::footer::Footer;
@@ -17,14 +18,14 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
         <!DOCTYPE html>
         <html lang="en">
             <head>
-                <meta charset="utf-8" />
-                <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <AutoReload options=options.clone() />
-                <HydrationScripts options />
-                <MetaTags />
+                <meta charset="utf-8"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <AutoReload options=options.clone()/>
+                <HydrationScripts options/>
+                <MetaTags/>
             </head>
             <body>
-                <App />
+                <App/>
             </body>
         </html>
     }
@@ -36,21 +37,21 @@ pub fn App() -> impl IntoView {
     provide_meta_context();
 
     view! {
-        // injects a stylesheet into the document <head>
-        // id=leptos means cargo-leptos will hot-reload this stylesheet
-        <Stylesheet id="leptos" href="/pkg/l3chat.css" />
-        <Title text="Welcome to Leptos" />
-        <Router>
-            <main>
-                <Routes fallback=|| "Page not found.".into_view()>
-                    <Route path=StaticSegment("") view=HomePage />
-                    <Route path=path!("admin") view=AdminLogin />
-                    <Route path=path!("admin-panel") view=ProtectedAdminPanel />
-                    <Route path=path!("writersroom") view=WritersRoom />
-                    <Route path=path!("draw") view=DrawingPage />
-                </Routes>
-            </main>
-        </Router>
+        <Stylesheet id="leptos" href="/pkg/l3chat.css"/>
+        <Title text="Welcome to Leptos"/>
+        <AuthProvider>
+            <Router>
+                <main>
+                    <Routes fallback=|| "Page not found.".into_view()>
+                        <Route path=StaticSegment("") view=HomePage/>
+                        <Route path=path!("admin") view=AdminLogin/>
+                        <Route path=path!("admin-panel") view=ProtectedAdminPanel/>
+                        <Route path=path!("writersroom") view=WritersRoom/>
+                        <Route path=path!("draw") view=DrawingPage/>
+                    </Routes>
+                </main>
+            </Router>
+        </AuthProvider>
     }
 }
 
@@ -65,9 +66,9 @@ fn HomePage() -> impl IntoView {
                 >
                     "l3chat"
                 </a>
-                <AuthNav />
+                <AuthNav/>
             </div>
-            <Poasts />
+            <Poasts/>
             <div class="container mx-auto p-4 flex justify-center">
                 <a
                     href="/draw"
@@ -76,7 +77,7 @@ fn HomePage() -> impl IntoView {
                     "Try Collaborative Drawing"
                 </a>
             </div>
-            <Footer />
+            <Footer/>
         </div>
     }
 }

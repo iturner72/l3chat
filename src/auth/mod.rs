@@ -1,4 +1,5 @@
 pub mod auth_components;
+pub mod context;
 #[cfg(feature = "ssr")]
 pub mod oauth;
 #[cfg(feature = "ssr")]

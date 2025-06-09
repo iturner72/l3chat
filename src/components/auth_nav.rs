@@ -1,27 +1,11 @@
-use leptos::{prelude::*, task::spawn_local};
+use leptos::prelude::*;
 
-use crate::auth::{verify_token, auth_components::LogoutButton};
+use crate::auth::{auth_components::LogoutButton, context::AuthContext};
 use crate::components::dark_mode_toggle::DarkModeToggle;
 
 #[component]
 pub fn AuthNav() -> impl IntoView {
-    let (is_authenticated, set_is_authenticated) = signal(false);
-    let (is_checking, set_is_checking) = signal(true);
-
-    Effect::new(move |_| {
-        spawn_local(async move {
-            match verify_token().await {
-                Ok(is_valid) => {
-                    set_is_authenticated(is_valid);
-                    set_is_checking(false);
-                }
-                Err(_) => {
-                    set_is_authenticated(false);
-                    set_is_checking(false);
-                }
-            }
-        });
-    });
+    let auth = use_context::<AuthContext>().expect("AuthContext not found");
 
     view! {
         <div class="items-end pr-4 flex space-x-4">
@@ -32,9 +16,9 @@ pub fn AuthNav() -> impl IntoView {
                 "yap"
             </a>
             {move || {
-                if is_checking() {
+                if auth.is_loading.get() {
                     view! { <span class="text-gray-400">"Loading..."</span> }.into_any()
-                } else if is_authenticated() {
+                } else if auth.is_authenticated.get() {
                     view! {
                         <>
                             <a
@@ -43,7 +27,7 @@ pub fn AuthNav() -> impl IntoView {
                             >
                                 "Admin"
                             </a>
-                            <LogoutButton />
+                            <LogoutButton/>
                         </>
                     }
                         .into_any()
@@ -59,6 +43,7 @@ pub fn AuthNav() -> impl IntoView {
                         .into_any()
                 }
             }}
+
             <a
                 href="https://github.com/iturner72/l3chat"
                 class="text-teal-600 dark:text-aqua-400 hover:text-teal-700 dark:hover:text-aqua-300 transition-colors duration-200"
@@ -67,7 +52,7 @@ pub fn AuthNav() -> impl IntoView {
             >
                 "github"
             </a>
-            <DarkModeToggle />
+            <DarkModeToggle/>
         </div>
     }
 }
