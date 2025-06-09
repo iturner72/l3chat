@@ -1,8 +1,11 @@
 use axum::{
+    body::Body,
+    extract::{Query, State, Request},
+    http::StatusCode,
     response::sse::{Event, Sse},
-    extract::{Query, State},
 };
 use futures::stream::Stream;
+use log::info;
 use std::{
     collections::HashMap,
     convert::Infallible,
@@ -12,6 +15,11 @@ use std::{
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+use crate::{
+    state::AppState,
+    auth::get_user_id_from_request,
+};
 
 pub struct CancellableSseStream {
     receiver: mpsc::Receiver<Result<Event, Infallible>>,
@@ -72,7 +80,6 @@ where
     let (tx, rx) = mpsc::channel(100);
     let cancel_token = state.register_stream(stream_id);
 
-    // clone token for the task
     let task_token = cancel_token.clone();
 
     tokio::spawn(async move {
@@ -89,13 +96,18 @@ where
 }
 
 pub async fn cancel_stream(
-    State(state): State<SseState>,
+    State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
-) -> &'static str {
+    request: Request<Body>,
+) -> Result<&'static str, StatusCode> {
+    let user_id = get_user_id_from_request(&request)
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    
     if let Some(stream_id) = params.get("stream_id") {
-        state.cancel_stream(stream_id);
-        "Stream cancelled"
+        info!("Cancelling stream: {stream_id} for user: {user_id}");
+        state.sse_state.cancel_stream(stream_id);
+        Ok("Stream cancelled")
     } else {
-        "No stream ID provided"
+        Ok("No stream ID provided")
     }
 }

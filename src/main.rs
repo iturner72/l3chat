@@ -4,13 +4,12 @@ cfg_if! {
     if #[cfg(feature = "ssr")] {
         use axum::{
             body::Body as AxumBody,
-            extract::{Query, State},
+            extract::State,
             http::Request,
             response::IntoResponse,
             routing::get,
             middleware,
             Router,
-            response::sse::Sse,
         };
         use dotenv::dotenv;
         use env_logger::Env;
@@ -18,21 +17,27 @@ cfg_if! {
         use leptos::prelude::*;
         use leptos_axum::{generate_route_list, handle_server_fns_with_context, LeptosRoutes};
         use l3chat::app::*;
-        use l3chat::auth::server::middleware::require_auth;
+        use l3chat::auth::server::middleware::require_auth_no_db;
+        use l3chat::auth::oauth::{google_login, discord_login, google_callback, discord_callback};
         use l3chat::cancellable_sse::*;
-        use l3chat::components::chat::{SseStream, send_message_stream};
         use l3chat::database::db::establish_connection;
-        use l3chat::handlers::*;
-        use std::collections::HashMap;
+        use l3chat::handlers::{
+            sse::{
+                create_stream,
+                embeddings_generation_handler,
+                local_embeddings_generation_handler,
+                send_message_stream_handler,
+            },
+            drawing_ws::drawing_ws_handler,
+        };
         use std::net::SocketAddr;
         use std::sync::{Arc,Mutex};
-        use tokio::sync::{mpsc, broadcast};
+        use tokio::sync::broadcast;
 
         #[tokio::main]
         async fn main() {
             dotenv().ok();
             env_logger::init_from_env(Env::default().default_filter_or("info"));
-
 
             let conf = get_configuration(None).unwrap();
             let addr = conf.leptos_options.site_addr;
@@ -41,7 +46,6 @@ cfg_if! {
             let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
             let pool = establish_connection(&database_url).expect("Failed to create database pool");
 
-            // Generate the list of routes in your Leptos App
             let routes = generate_route_list(App);
 
             let app_state = AppState {
@@ -50,6 +54,7 @@ cfg_if! {
                 sse_state: SseState::new(),
                 drawing_tx: broadcast::Sender::new(100),
                 user_count: Arc::new(Mutex::new(0)),
+                oauth_states: Arc::new(dashmap::DashMap::new()),
             };
 
             async fn server_fn_handler(
@@ -65,32 +70,23 @@ cfg_if! {
                 .await
             }
 
+            // OAuth routes (public)
+            let oauth_routes = Router::new()
+                .route("/auth/google", get(google_login))
+                .route("/auth/google/callback", get(google_callback))
+                .route("/auth/discord", get(discord_login))
+                .route("/auth/discord/callback", get(discord_callback));
+
             let protected_routes = Router::new()
                 .route("/api/create-stream", get(create_stream))
                 .route("/api/cancel-stream", get(cancel_stream))
                 .route("/api/generate-embeddings", get(embeddings_generation_handler))
                 .route("/api/generate-local-embeddings", get(local_embeddings_generation_handler))
-                .route("/api/send_message_stream", axum::routing::get(|
-                    State(app_state): State<AppState>,
-                    Query(params): Query<HashMap<String, String>>
-                | async move {
-                    let (tx, rx) = mpsc::channel(1);
-                    if let (Some(thread_id), Some(model), Some(lab)) = (
-                        params.get("thread_id"),
-                        params.get("model"),
-                        params.get("lab")
-                    ) {
-                        let pool = app_state.pool.clone();
-                        let thread_id = thread_id.clone();
-                        let model = model.clone();
-                        let lab = lab.clone();
-                        tokio::spawn(async move {
-                            send_message_stream(&pool, thread_id, model, lab, tx).await;
-                        });
-                    }
-                    Sse::new(SseStream { receiver: rx })
-                }))
-                .layer(middleware::from_fn(require_auth));
+                .route("/api/send_message_stream", get(send_message_stream_handler))
+                .layer(middleware::from_fn_with_state(
+                    app_state.clone(),
+                    require_auth_no_db
+                ));
 
             let app = Router::new()
                 .route(
@@ -98,6 +94,7 @@ cfg_if! {
                     get(server_fn_handler).post(server_fn_handler),
                 )
                 .route("/ws/drawing", get(drawing_ws_handler))
+                .merge(oauth_routes)
                 .merge(protected_routes)
                 .leptos_routes_with_handler(routes, get(|State(app_state): State<AppState>, request: Request<AxumBody>| async move {
                     let handler = leptos_axum::render_app_to_stream_with_context(

@@ -7,7 +7,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use web_sys::{EventSource, MessageEvent, ErrorEvent, HtmlElement};
 
-use crate::models::conversations::NewMessageView;
+use crate::{auth::get_current_user, models::conversations::NewMessageView};
 
 cfg_if! {
     if #[cfg(feature = "ssr")] {
@@ -58,7 +58,12 @@ cfg_if! {
                 AnthropicService { client, api_key, model }
             }
 
-            pub async fn send_message(&self, pool: &DbPool, thread_id: &str, tx: mpsc::Sender<Result<Event, anyhow::Error>>) -> Result<(), Error> {
+            pub async fn send_message(
+                &self,
+                pool: &DbPool,
+                thread_id: &str,
+                tx: mpsc::Sender<Result<Event, std::convert::Infallible>>
+            ) -> Result<(), anyhow::Error> {
                 info!("Sending message to OpenAI API");
                 info!("Current thread id: {thread_id}");
 
@@ -71,8 +76,6 @@ cfg_if! {
                     }))
                     .collect::<Vec<_>>();
         
-//                info!("history: {:?}", api_messages.clone());
-
                 let response = self.client.post("https://api.anthropic.com/v1/messages")
                     .header("x-api-key", self.api_key.to_string())
                     .header("anthropic-version", "2023-06-01")
@@ -89,7 +92,6 @@ cfg_if! {
 
                 let mut stream = response.bytes_stream();
 
-                // todo (this is copy pasta from open ai below, will need to fix!!
                 let re = Regex::new(r#""text":"([^"]*)""#).unwrap();
                 while let Some(item) = stream.next().await {
                     match item {
@@ -114,7 +116,8 @@ cfg_if! {
                         }
                         Err(e) => {
                             error!("Failed to process stream: {e}");
-                            tx.send(Err(anyhow!("Failed to process stream: {}", e))).await.ok();
+                            let error_event = Event::default().data(format!("Error: Failed to process stream: {e}"));
+                            tx.send(Ok(error_event)).await.ok();
                             break;
                         }
                     }
@@ -133,7 +136,12 @@ cfg_if! {
                 OpenAIService { client, api_key, model }
             }
 
-            pub async fn send_message(&self, pool: &DbPool, thread_id: &str, tx: mpsc::Sender<Result<Event, anyhow::Error>>) -> Result<(), Error> {
+            pub async fn send_message(
+                &self,
+                pool: &DbPool,
+                thread_id: &str,
+                tx: mpsc::Sender<Result<Event, std::convert::Infallible>>
+            ) -> Result<(), anyhow::Error> {
                 info!("Sending message to OpenAI API");
                 info!("Current thread id: {thread_id}");
 
@@ -145,8 +153,6 @@ cfg_if! {
                         "content": msg.content.unwrap_or_default(),
                     }))
                     .collect::<Vec<_>>();
-
-//                info!("history: {:?}", api_messages.clone());
 
                 let response = self.client.post("https://api.openai.com/v1/chat/completions")
                     .header("Authorization", format!("Bearer {}", self.api_key))
@@ -187,7 +193,8 @@ cfg_if! {
                         }
                         Err(e) => {
                             error!("Failed to process stream: {e}");
-                            tx.send(Err(anyhow!("Failed to process stream: {}", e))).await.ok();
+                            let error_event = Event::default().data(format!("Error: Failed to process stream: {e}"));
+                            tx.send(Ok(error_event)).await.ok();
                             break;
                         }
                     }
@@ -223,26 +230,28 @@ cfg_if! {
             thread_id: String,
             model: String,
             active_lab: String,
-            tx: mpsc::Sender<Result<Event, anyhow::Error>>
+            tx: mpsc::Sender<Result<Event, std::convert::Infallible>>
         ) {
             let decoded_thread_id = urlencoding::decode(&thread_id).expect("Failed to decode thread_id");
             let decoded_model = urlencoding::decode(&model).expect("Failed to decode model");
             let decoded_lab = urlencoding::decode(&active_lab).expect("failed to decode lab");
-
+        
             let result = match decoded_lab.as_ref() {
                 "anthropic" => {
                     let anthropic_service = AnthropicService::new(decoded_model.into_owned());
                     anthropic_service.send_message(pool, &decoded_thread_id, tx.clone()).await
                 },
                 "openai" => {
-                let openai_service = OpenAIService::new(decoded_model.into_owned());
-                openai_service.send_message(pool, &decoded_thread_id, tx.clone()).await
+                    let openai_service = OpenAIService::new(decoded_model.into_owned());
+                    openai_service.send_message(pool, &decoded_thread_id, tx.clone()).await
                 },
                 _ => Err(anyhow::anyhow!("unsupported lab: {}", decoded_lab)),
             };
-
+        
             if let Err(e) = result {
                 error!("Error in send_message_stream: {e}");
+                let error_event = Event::default().data(format!("Error: {e}"));
+                let _ = tx.send(Ok(error_event)).await;
             }
         }
     }
@@ -272,12 +281,19 @@ pub fn Chat(
             set_llm_content.set("".to_string());
             let is_llm = false;
 
+            // Get current user to extract user_id
+            let user_id = match get_current_user().await {
+                Ok(Some(user)) => Some(user.id),
+                _ => None,
+            };
+
             let new_message_view = NewMessageView {
                 thread_id: current_thread_id.clone(),
                 content: Some(message_value.clone()),
                 role: role.to_string(),
                 active_model: selected_model.clone(),
                 active_lab: active_lab.clone(),
+                user_id,
             };
 
             match create_message(new_message_view, is_llm).await {
@@ -306,6 +322,7 @@ pub fn Chat(
                                     role: "assistant".to_string(),
                                     active_model: model().clone(),
                                     active_lab: lab().clone(),
+                                    user_id,
                                 };
 
                                 spawn_local(async move {
@@ -419,16 +436,19 @@ pub fn Chat(
 #[server(CreateMessage, "/api")]
 pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> Result<(), ServerFnError> {
     use diesel::prelude::*;
-    use diesel_async::AsyncConnection; // Only import AsyncConnection, not RunQueryDsl
+    use diesel_async::AsyncConnection;
     use std::fmt;
+
     use crate::state::AppState;
     use crate::models::conversations::{NewMessage, Thread};
     use crate::schema::{messages, threads};
+    use crate::auth::get_current_user;
 
     #[derive(Debug)]
     enum CreateMessageError {
         PoolError(String),
         DatabaseError(diesel::result::Error),
+        Unauthorized,
     }
 
     impl fmt::Display for CreateMessageError {
@@ -436,6 +456,7 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
             match self {
                 CreateMessageError::PoolError(e) => write!(f, "Pool error: {e}"),
                 CreateMessageError::DatabaseError(e) => write!(f, "Database error: {e}"),
+                CreateMessageError::Unauthorized => write!(f, "unauthorized - user not logged in"),
             }
         }
     }
@@ -449,13 +470,15 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
     let app_state = use_context::<AppState>()
         .expect("Failed to get AppState from context");
 
-    // Get a connection from the pool
     let mut conn = app_state.pool
         .get()
         .await
         .map_err(|e| CreateMessageError::PoolError(e.to_string()))?;
 
     let new_message: NewMessage = new_message_view.into();
+
+    let current_user = get_current_user().await.map_err(|_| CreateMessageError::Unauthorized)?;
+    let user_id = current_user.ok_or(CreateMessageError::Unauthorized)?.id;
 
     // Use async transaction
     conn.transaction(|conn| {
@@ -477,9 +500,9 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
                         id: thread_id.clone(),
                         created_at: None,
                         updated_at: None,
+                        user_id: Some(user_id),
                     };
                     
-                    // Explicitly use async version
                     diesel_async::RunQueryDsl::execute(
                         diesel::insert_into(threads::table).values(&new_thread),
                         conn
@@ -488,7 +511,6 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
                 }
             }
 
-            // Insert the message - explicitly use async version
             diesel_async::RunQueryDsl::execute(
                 diesel::insert_into(messages::table).values(&new_message),
                 conn

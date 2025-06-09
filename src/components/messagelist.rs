@@ -136,17 +136,20 @@ pub fn MessageList(
 
 #[server(GetMessages, "/api")]
 pub async fn get_messages() -> Result<Vec<MessageView>, ServerFnError> {
+    use diesel::prelude::*;
     use diesel_async::RunQueryDsl; 
     use std::fmt;
 
     use crate::state::AppState;
     use crate::models::conversations::Message;
-    use crate::schema::messages::dsl::messages as messages_table;
+    use crate::schema::messages::dsl::*;
+    use crate::auth::get_current_user;
 
     #[derive(Debug)]
     enum MessageError {
         Pool(String),
         Database(diesel::result::Error),
+        Unauthorized,
     }
 
     impl fmt::Display for MessageError {
@@ -154,7 +157,14 @@ pub async fn get_messages() -> Result<Vec<MessageView>, ServerFnError> {
             match self {
                 MessageError::Pool(e) => write!(f, "Pool error: {e}"),
                 MessageError::Database(e) => write!(f, "Database error: {e}"),
+                MessageError::Unauthorized => write!(f, "unauthorized - user not logged in"),
             }
+        }
+    }
+
+    impl From<MessageError> for ServerFnError {
+        fn from(error: MessageError) -> Self {
+            ServerFnError::ServerError(error.to_string())
         }
     }
 
@@ -162,18 +172,20 @@ pub async fn get_messages() -> Result<Vec<MessageView>, ServerFnError> {
         ServerFnError::ServerError(e.to_string())
     }
 
+    let current_user = get_current_user().await.map_err(|_| MessageError::Unauthorized)?;
+    let current_user_id = current_user.ok_or(MessageError::Unauthorized)?.id;
+
     let app_state = use_context::<AppState>()
         .expect("Failed to get AppState from context");
 
-    // Get a connection from the pool
     let mut conn = app_state.pool
         .get()
         .await
         .map_err(|e| MessageError::Pool(e.to_string()))
         .map_err(to_server_error)?;
 
-    // Use async diesel query - no need for .interact()
-    let result = messages_table
+    let result = messages
+        .filter(user_id.eq(current_user_id))
         .load::<Message>(&mut conn)
         .await
         .map_err(MessageError::Database)

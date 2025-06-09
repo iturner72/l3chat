@@ -7,6 +7,7 @@ pub struct ThreadView {
     pub id: String,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
+    pub user_id: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -19,6 +20,7 @@ pub struct MessageView {
     pub active_lab: String,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
+    pub user_id: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -28,6 +30,7 @@ pub struct NewMessageView {
     pub role: String,
     pub active_model: String,
     pub active_lab: String,
+    pub user_id: Option<i32>,
 }
 
 cfg_if! { if #[cfg(feature = "ssr")] {
@@ -42,6 +45,7 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub id: String,
         pub created_at: Option<NaiveDateTime>,
         pub updated_at: Option<NaiveDateTime>,
+        pub user_id: Option<i32>,
     }
 
     impl From<Thread> for ThreadView {
@@ -50,6 +54,7 @@ cfg_if! { if #[cfg(feature = "ssr")] {
                 id: thread.id,
                 created_at: thread.created_at.map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
                 updated_at: thread.updated_at.map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
+                user_id: thread.user_id,
             }
         }
     }
@@ -68,6 +73,7 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub active_lab: String,
         pub created_at: Option<NaiveDateTime>,
         pub updated_at: Option<NaiveDateTime>,
+        pub user_id: Option<i32>,
     }
 
     impl From<Message> for MessageView {
@@ -81,6 +87,7 @@ cfg_if! { if #[cfg(feature = "ssr")] {
                 active_lab: message.active_lab,
                 created_at: message.created_at.map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
                 updated_at: message.updated_at.map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
+                user_id: message.user_id,
             }
         }
     }
@@ -94,6 +101,7 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub role: String,
         pub active_model: String,
         pub active_lab: String,
+        pub user_id: Option<i32>,
     }
 
     impl From<NewMessageView> for NewMessage {
@@ -104,6 +112,7 @@ cfg_if! { if #[cfg(feature = "ssr")] {
                 role: view.role,
                 active_model: view.active_model,
                 active_lab: view.active_lab,
+                user_id: view.user_id,
             }
         }
     }

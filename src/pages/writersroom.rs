@@ -165,11 +165,13 @@ pub async fn create_thread() -> Result<String, ServerFnError> {
     use std::fmt;
     use crate::state::AppState;
     use crate::models::conversations::Thread;
+    use crate::auth::get_current_user;
 
     #[derive(Debug)]
     enum ThreadError {
         Pool(String),
         Database(diesel::result::Error),
+        Unauthorized,
     }
 
     impl fmt::Display for ThreadError {
@@ -177,13 +179,23 @@ pub async fn create_thread() -> Result<String, ServerFnError> {
             match self {
                 ThreadError::Pool(e) => write!(f, "pool error: {e}"),
                 ThreadError::Database(e) => write!(f, "database error: {e}"),
+                ThreadError::Unauthorized => write!(f, "unauthorized - user not logged in"),
             }
+        }
+    }
+
+    impl From<ThreadError> for ServerFnError {
+        fn from(error: ThreadError) -> Self {
+            ServerFnError::ServerError(error.to_string())
         }
     }
 
     fn to_server_error(e: ThreadError) -> ServerFnError {
         ServerFnError::ServerError(e.to_string())
     }
+
+    let current_user = get_current_user().await.map_err(|_| ThreadError::Unauthorized)?;
+    let user_id = current_user.ok_or(ThreadError::Unauthorized)?.id;
 
     let app_state = use_context::<AppState>()
         .expect("failed to get AppState from context");
@@ -198,6 +210,7 @@ pub async fn create_thread() -> Result<String, ServerFnError> {
         id: uuid::Uuid::new_v4().to_string(),
         created_at: Some(Utc::now().naive_utc()),
         updated_at: Some(Utc::now().naive_utc()),
+        user_id: Some(user_id), 
     };
 
     diesel::insert_into(threads::table)

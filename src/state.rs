@@ -7,9 +7,11 @@ cfg_if! {
         use std::sync::{Arc,Mutex};
         use leptos::prelude::LeptosOptions;
         use serde::{Serialize, Deserialize};
+        use dashmap::DashMap;
 
         use crate::cancellable_sse::SseState;
         use crate::database::db::DbPool;
+        use crate::auth::oauth::OAuthState;
 
         #[derive(Clone, Debug, Serialize, Deserialize)]
         pub struct DrawEvent {
@@ -31,7 +33,7 @@ cfg_if! {
             pub sse_state: SseState,
             pub drawing_tx: broadcast::Sender<DrawEvent>,
             pub user_count: Arc<Mutex<usize>>,
-
+            pub oauth_states: Arc<DashMap<String, OAuthState>>,
         }
 
         impl AppState {
@@ -42,7 +44,8 @@ cfg_if! {
                     pool,
                     sse_state: SseState::new(),
                     drawing_tx,
-                    user_count: Arc::new(Mutex::new(0))
+                    user_count: Arc::new(Mutex::new(0)),
+                    oauth_states: Arc::new(DashMap::new()),
                 }
             }
         }

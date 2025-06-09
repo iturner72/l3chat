@@ -1,31 +1,7 @@
 use leptos::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::fmt;
 
-pub const ACCESS_COOKIE_NAME: &str = "bb_access";
-pub const REFRESH_COOKIE_NAME: &str = "bb_refresh";
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AuthResponse {
-    pub access_token: String,
-    pub refresh_token: String,
-    pub access_expires_in: usize,
-    pub refresh_expires_in: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TokenClaims {
-    pub sub: String,
-    pub exp: usize,
-    pub iat: usize,
-    pub token_type: TokenType,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub enum TokenType {
-    Access,
-    Refresh,
-}
+pub const AUTH_COOKIE_NAME: &str = "auth_token";
 
 #[derive(Debug)]
 pub enum AuthError {

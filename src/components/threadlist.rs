@@ -72,7 +72,7 @@ pub fn ThreadList(
         <div class="thread-list-container flex flex-col items-start pt-2">
             <input
                 type="text"
-                placeholder="grep articles!"
+                placeholder="grep threads!"
                 on:input=handle_search
                 class="grep-box w-7/12 p-2 mb-2 bg-gray-100 dark:bg-teal-800 text-teal-600 dark:text-mint-400
                 border-2 border-gray-300 dark:border-teal-600 focus:border-teal-500 dark:focus:border-mint-300
@@ -172,17 +172,19 @@ pub fn ThreadList(
 #[server(SearchThreads, "/api")]
 pub async fn search_threads(query: String) -> Result<Vec<ThreadView>, ServerFnError> {
     use diesel::prelude::*;
-    use diesel_async::RunQueryDsl; // Important: import the async trait
+    use diesel_async::RunQueryDsl;
     use std::fmt;
 
     use crate::state::AppState;
     use crate::models::conversations::Thread;
     use crate::schema::{threads, messages};
+    use crate::auth::get_current_user;
 
     #[derive(Debug)]
     enum SearchError {
         Pool(String),
         Database(diesel::result::Error),
+        Unauthorized,
     }
 
     impl fmt::Display for SearchError {
@@ -190,7 +192,14 @@ pub async fn search_threads(query: String) -> Result<Vec<ThreadView>, ServerFnEr
             match self {
                 SearchError::Pool(e) => write!(f, "pool error: {e}"),
                 SearchError::Database(e) => write!(f, "database error: {e}"),
+                SearchError::Unauthorized => write!(f, "unauthorized - user not logged in"),
             }
+        }
+    }
+
+    impl From<SearchError> for ServerFnError {
+        fn from(error: SearchError) -> Self {
+            ServerFnError::ServerError(error.to_string())
         }
     }
 
@@ -198,19 +207,21 @@ pub async fn search_threads(query: String) -> Result<Vec<ThreadView>, ServerFnEr
         ServerFnError::ServerError(e.to_string())
     }
 
+    let current_user = get_current_user().await.map_err(|_| SearchError::Unauthorized)?;
+    let other_user_id = current_user.ok_or(SearchError::Unauthorized)?.id;
+
     let app_state = use_context::<AppState>()
         .expect("failed to get AppState from context");
 
-    // Get a connection from the pool
     let mut conn = app_state.pool
         .get()
         .await
         .map_err(|e| SearchError::Pool(e.to_string()))
         .map_err(to_server_error)?;
 
-    // Use async diesel query - no need for .interact()
     let result = threads::table
         .left_join(messages::table)
+        .filter(threads::user_id.eq(other_user_id))
         .filter(
             threads::id.like(format!("%{query}%"))
                 .or(messages::content.like(format!("%{query}%")))
@@ -228,7 +239,7 @@ pub async fn search_threads(query: String) -> Result<Vec<ThreadView>, ServerFnEr
 #[server(DeleteThread, "/api")]
 pub async fn delete_thread(thread_id: String) -> Result<(), ServerFnError> {
     use diesel::prelude::*;
-    use diesel_async::{RunQueryDsl, AsyncConnection}; // Import async traits
+    use diesel_async::{RunQueryDsl, AsyncConnection};
     use crate::schema::{threads, messages};
     use std::fmt;
     use crate::state::AppState;
@@ -255,14 +266,12 @@ pub async fn delete_thread(thread_id: String) -> Result<(), ServerFnError> {
     let app_state = use_context::<AppState>()
         .expect("failed to get AppState from context");
 
-    // Get a connection from the pool
     let mut conn = app_state.pool
         .get()
         .await
         .map_err(|e| ThreadError::Pool(e.to_string()))
         .map_err(to_server_error)?;
 
-    // Use async transaction - no need for .interact()
     conn.transaction(|conn| {
         Box::pin(async move {
             // First, delete all messages associated with thread
@@ -288,17 +297,19 @@ pub async fn delete_thread(thread_id: String) -> Result<(), ServerFnError> {
 #[server(GetThreads, "/api")]
 pub async fn get_threads() -> Result<Vec<ThreadView>, ServerFnError> {
     use diesel::prelude::*;
-    use diesel_async::RunQueryDsl; // Important: import the async trait
+    use diesel_async::RunQueryDsl;
     use std::fmt;
 
     use crate::state::AppState;
     use crate::models::conversations::Thread;
     use crate::schema::threads::dsl::threads as threads_table;
+    use crate::auth::get_current_user;
 
     #[derive(Debug)]
     enum ThreadError {
         Pool(String),
         Database(diesel::result::Error),
+        Unauthorized,
     }
 
     impl fmt::Display for ThreadError {
@@ -306,7 +317,14 @@ pub async fn get_threads() -> Result<Vec<ThreadView>, ServerFnError> {
             match self {
                 ThreadError::Pool(e) => write!(f, "Pool error: {e}"),
                 ThreadError::Database(e) => write!(f, "Database error: {e}"),
+                ThreadError::Unauthorized => write!(f, "Unauthorized"),
             }
+        }
+    }
+
+    impl From<ThreadError> for ServerFnError {
+        fn from(error: ThreadError) -> Self {
+            ServerFnError::ServerError(error.to_string())
         }
     }
 
@@ -314,18 +332,20 @@ pub async fn get_threads() -> Result<Vec<ThreadView>, ServerFnError> {
         ServerFnError::ServerError(e.to_string())
     }
 
+    let current_user = get_current_user().await.map_err(|_| ThreadError::Unauthorized)?;
+    let user_id = current_user.ok_or(ThreadError::Unauthorized)?.id;
+
     let app_state = use_context::<AppState>()
         .expect("Failed to get AppState from context");
 
-    // Get a connection from the pool
     let mut conn = app_state.pool
         .get()
         .await
         .map_err(|e| ThreadError::Pool(e.to_string()))
         .map_err(to_server_error)?;
 
-    // Use async diesel query - no need for .interact()
     let result = threads_table
+        .filter(crate::schema::threads::user_id.eq(user_id))
         .order(crate::schema::threads::created_at.desc())
         .load::<Thread>(&mut conn)
         .await
