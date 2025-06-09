@@ -81,6 +81,7 @@ pub fn WritersRoom() -> impl IntoView {
                             create_new_thread.dispatch(());
                         }
                     >
+
                         "mew"
                     </button>
                 </div>
@@ -125,7 +126,6 @@ pub fn WritersRoom() -> impl IntoView {
                                                     <ThreadList
                                                         current_thread_id=thread_id
                                                         set_current_thread_id=set_thread_id
-                                                        // will use for filtering later
                                                         _lab=lab
                                                     />
                                                 </div>
@@ -133,7 +133,10 @@ pub fn WritersRoom() -> impl IntoView {
                                                 .into_any()
                                         }
                                         Err(_e) => {
-                                            view! { <div>"error loading threads: {e}"</div> }.into_any()
+                                            view! {
+                                                <div>"error loading threads: {e}"</div>
+                                            }
+                                                .into_any()
                                         }
                                     }
                                 })
@@ -142,14 +145,14 @@ pub fn WritersRoom() -> impl IntoView {
                     </Suspense>
                 </div>
                 <div class="w-full flex flex-col content-end justify-between h-[calc(80vh-10px)]">
-                    <MessageList current_thread_id=thread_id />
+                    <MessageList current_thread_id=thread_id set_current_thread_id=set_thread_id/>
                     <div class="relative text-gray-900 dark:text-gray-100">
                         <Toast
                             message=toast_message
                             visible=toast_visible
                             on_close=move || set_toast_visible(false)
                         />
-                        <Chat thread_id=thread_id model=model lab=lab />
+                        <Chat thread_id=thread_id model=model lab=lab/>
                     </div>
                 </div>
             </div>
@@ -210,7 +213,10 @@ pub async fn create_thread() -> Result<String, ServerFnError> {
         id: uuid::Uuid::new_v4().to_string(),
         created_at: Some(Utc::now().naive_utc()),
         updated_at: Some(Utc::now().naive_utc()),
-        user_id: Some(user_id), 
+        user_id: Some(user_id),
+        parent_thread_id: None,
+        branch_point_message_id: None,
+        branch_name: None,
     };
 
     diesel::insert_into(threads::table)
@@ -222,3 +228,4 @@ pub async fn create_thread() -> Result<String, ServerFnError> {
 
     Ok(new_thread.id)
 }
+

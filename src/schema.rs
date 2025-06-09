@@ -22,6 +22,11 @@ diesel::table! {
         created_at -> Nullable<Timestamp>,
         updated_at -> Nullable<Timestamp>,
         user_id -> Nullable<Int4>,
+        #[max_length = 255]
+        parent_thread_id -> Nullable<Varchar>,
+        branch_point_message_id -> Nullable<Int4>,
+        #[max_length = 255]
+        branch_name -> Nullable<Varchar>,
     }
 }
 
@@ -39,7 +44,6 @@ diesel::table! {
     }
 }
 
-diesel::joinable!(messages -> threads (thread_id));
 diesel::joinable!(messages -> users (user_id));
 diesel::joinable!(threads -> users (user_id));
 

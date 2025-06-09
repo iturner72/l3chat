@@ -13,7 +13,7 @@ pub struct AuthContext {
 
 impl AuthContext {
     pub fn refresh_auth(&self) {
-        self.refresh.update(|v| *v += 1);
+        self.refresh.update(|v| *v = (*v + 1) % 1000);
     }
 }
 

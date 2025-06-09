@@ -8,6 +8,9 @@ pub struct ThreadView {
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
     pub user_id: Option<i32>,
+    pub parent_thread_id: Option<String>,
+    pub branch_point_message_id: Option<i32>,
+    pub branch_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -33,6 +36,15 @@ pub struct NewMessageView {
     pub user_id: Option<i32>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BranchInfo {
+    pub thread_id: String,
+    pub branch_name: Option<String>,
+    pub model: String,
+    pub lab: String,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
 cfg_if! { if #[cfg(feature = "ssr")] {
     use crate::schema::*;
     use chrono::NaiveDateTime;
@@ -46,6 +58,9 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub created_at: Option<NaiveDateTime>,
         pub updated_at: Option<NaiveDateTime>,
         pub user_id: Option<i32>,
+        pub parent_thread_id: Option<String>,
+        pub branch_point_message_id: Option<i32>,
+        pub branch_name: Option<String>,
     }
 
     impl From<Thread> for ThreadView {
@@ -55,6 +70,9 @@ cfg_if! { if #[cfg(feature = "ssr")] {
                 created_at: thread.created_at.map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
                 updated_at: thread.updated_at.map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
                 user_id: thread.user_id,
+                parent_thread_id: thread.parent_thread_id,
+                branch_point_message_id: thread.branch_point_message_id,
+                branch_name: thread.branch_name,
             }
         }
     }

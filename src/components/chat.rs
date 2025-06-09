@@ -395,6 +395,7 @@ pub fn Chat(
                             </p>
                         }
                     }}
+
                 </Suspense>
             </div>
             <div class="flex flex-row justify-center space-x-4 w-6/12 md:w-7/12">
@@ -418,7 +419,8 @@ pub fn Chat(
                             )
                             .unwrap();
                     }
-                ></textarea>
+                >
+                </textarea>
                 <button
                     class="ib text-white bg-seafoam-600 hover:bg-seafoam-700 dark:bg-teal-600 dark:hover:bg-teal-700
                     text-xs md:text-lg w-1/6 p-2 rounded-md transition duration-300 ease-in-out
@@ -501,6 +503,9 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
                         created_at: None,
                         updated_at: None,
                         user_id: Some(user_id),
+                        parent_thread_id: None,
+                        branch_point_message_id: None,
+                        branch_name: None,
                     };
                     
                     diesel_async::RunQueryDsl::execute(
