@@ -535,6 +535,58 @@ pub async fn create_branch(
     let source_thread_id_clone = source_thread_id.clone();
     let new_thread_id_clone = new_thread_id.clone();
 
+    // Helper function to reconstruct conversation history recursively
+    fn get_full_conversation_history<'a>(
+        conn: &'a mut diesel_async::AsyncPgConnection,
+        thread_id: &'a str,
+        branch_point_message_id: i32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<Message>, diesel::result::Error>> + Send + 'a>> {
+        Box::pin(async move {
+            // Get the source thread
+            let source_thread = threads::table
+                .find(thread_id)
+                .first::<Thread>(conn)
+                .await?;
+
+            let mut all_messages = Vec::new();
+
+            // If this thread has a parent, get the conversation history from the parent first
+            if let Some(parent_thread_id) = &source_thread.parent_thread_id {
+                if let Some(parent_branch_point) = source_thread.branch_point_message_id {
+                    // Recursively get messages from parent up to its branch point
+                    let parent_messages = get_full_conversation_history(
+                        conn, 
+                        parent_thread_id, 
+                        parent_branch_point
+                    ).await?;
+                    all_messages.extend(parent_messages);
+                }
+            }
+
+            // Get messages from the current thread
+            let current_messages = if source_thread.parent_thread_id.is_some() {
+                // If this is a branch, get messages from this thread up to (but not including) the branch point
+                messages::table
+                    .filter(messages::thread_id.eq(thread_id))
+                    .filter(messages::id.lt(branch_point_message_id)) // Changed from .le to .lt
+                    .order(messages::id.asc())
+                    .load::<Message>(conn)
+                    .await?
+            } else {
+                // If this is a root thread, get messages up to (but not including) the branch point
+                messages::table
+                    .filter(messages::thread_id.eq(thread_id))
+                    .filter(messages::id.lt(branch_point_message_id)) // Changed from .le to .lt
+                    .order(messages::id.asc())
+                    .load::<Message>(conn)
+                    .await?
+            };
+
+            all_messages.extend(current_messages);
+            Ok(all_messages)
+        })
+    }
+
     let result = conn.transaction(|conn| {
         Box::pin(async move {
             // Verify source thread exists and user owns it
@@ -546,13 +598,12 @@ pub async fn create_branch(
                 .optional()?
                 .ok_or(BranchError::NotFound)?;
 
-            // Get messages up to and including the branch point
-            let messages_to_copy = messages::table
-                .filter(messages::thread_id.eq(&source_thread_id_clone))
-                .filter(messages::id.le(branch_point_message_id))
-                .order(messages::id.asc())
-                .load::<Message>(conn)
-                .await?;
+            // Get the full conversation history up to the branch point
+            let messages_to_copy = get_full_conversation_history(
+                conn,
+                &source_thread_id_clone,
+                branch_point_message_id
+            ).await?;
 
             if messages_to_copy.is_empty() {
                 return Err(BranchError::NotFound);
@@ -567,8 +618,7 @@ pub async fn create_branch(
                 parent_thread_id: Some(source_thread_id_clone.clone()),
                 branch_point_message_id: Some(branch_point_message_id),
                 branch_name: branch_name.or_else(|| {
-                    Some(format!("{} branch", target_model)) // will likely change this to a
-                                                             // summary of branch
+                    Some(format!("{} branch", target_model))
                 }),
             };
 
@@ -577,7 +627,7 @@ pub async fn create_branch(
                 .execute(conn)
                 .await?;
 
-            // Copy messages to new thread
+            // Copy messages to new thread with new IDs
             for message in messages_to_copy {
                 let new_message = NewMessage {
                     thread_id: new_thread_id_clone.clone(),
