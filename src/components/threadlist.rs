@@ -36,7 +36,7 @@ pub fn ThreadList(
 
     let delete_thread_action = Action::new(move |thread_id: &String| {
         let thread_id = thread_id.clone();
-        let current_id = current_thread_id.get();
+        let current_id = current_thread_id.get_untracked(); 
         async move {
             match delete_thread(thread_id.clone()).await {
                 Ok(_) => {
@@ -50,6 +50,7 @@ pub fn ThreadList(
                                     set_current_thread_id(next_thread.id.clone());
                                 } else {
                                     log::info!("no threads left gang");
+                                    set_current_thread_id(String::new());
                                 }
                             }
                             Err(e) => {
@@ -65,17 +66,55 @@ pub fn ThreadList(
         }
     });
 
-    // Helper function to determine if a thread is a branch
-    let is_branch = |thread: &ThreadView| thread.parent_thread_id.is_some();
+    // Helper function to build thread tree structure - make it deterministic
+    let build_thread_tree = |threads: Vec<ThreadView>| -> Vec<ThreadNode> {
+        let mut all_nodes: std::collections::BTreeMap<String, ThreadNode> = threads
+            .into_iter()
+            .map(|thread| {
+                let id = thread.id.clone();
+                (id, ThreadNode {
+                    thread,
+                    children: Vec::new(),
+                })
+            })
+            .collect();
 
-    let get_display_name = |thread: &ThreadView| {
-        if let Some(branch_name) = &thread.branch_name {
-            branch_name.clone()
-        } else if thread.parent_thread_id.is_some() {
-            format!("Branch of {}", thread.parent_thread_id.as_ref().unwrap_or(&"unknown".to_string())[..8].to_string())
-        } else {
-            thread.id.clone()
+        // Collect parent-child relationships and sort them for deterministic order
+        let mut relationships: Vec<(String, String)> = Vec::new(); // (child_id, parent_id)
+        for node in all_nodes.values() {
+            if let Some(parent_id) = &node.thread.parent_thread_id {
+                relationships.push((node.thread.id.clone(), parent_id.clone()));
+            }
         }
+        
+        // Sort relationships for deterministic processing
+        relationships.sort();
+
+        // Move children to their parents
+        for (child_id, parent_id) in relationships {
+            if all_nodes.contains_key(&parent_id) {
+                if let Some(child_node) = all_nodes.remove(&child_id) {
+                    if let Some(parent_node) = all_nodes.get_mut(&parent_id) {
+                        parent_node.children.push(child_node);
+                    }
+                }
+            }
+        }
+
+        // Sort children within each parent by creation time for consistency
+        for node in all_nodes.values_mut() {
+            node.children.sort_by(|a, b| {
+                a.thread.created_at.cmp(&b.thread.created_at)
+            });
+        }
+
+        // Collect remaining nodes (these are roots) and sort by creation time
+        let mut roots: Vec<ThreadNode> = all_nodes.into_values().collect();
+        roots.sort_by(|a, b| {
+            b.thread.created_at.cmp(&a.thread.created_at)
+        });
+
+        roots
     };
 
     view! {
@@ -90,157 +129,292 @@ pub fn ThreadList(
             />
 
             <Suspense fallback=move || {
-                view! { <p>"Loading threads..."</p> }
+                view! {
+                    <div class="w-7/12">
+                        <p class="text-gray-500 dark:text-gray-400 text-sm">"Loading threads..."</p>
+                    </div>
+                }
             }>
-                {move || {
-                    let resource = if search_query.get().is_empty() {
-                        threads_resource.get()
-                    } else {
-                        search_resource.get()
-                    };
-                    resource
-                        .map(|result| {
-                            match result {
-                                Ok(thread_list) => {
-                                    let mut main_threads = Vec::new();
-                                    let mut branches = Vec::new();
-                                    for thread in thread_list.iter() {
-                                        if is_branch(thread) {
-                                            branches.push(thread.clone());
+                <For
+                    each=move || {
+                        let resource = if !search_query.get().is_empty() {
+                            search_resource.get()
+                        } else {
+                            threads_resource.get()
+                        };
+                        resource
+                            .map(|result| {
+                                match result {
+                                    Ok(thread_list) => {
+                                        if thread_list.is_empty() {
+                                            Vec::new()
                                         } else {
-                                            main_threads.push(thread.clone());
+                                            build_thread_tree(thread_list)
                                         }
                                     }
-                                    view! {
-                                        <div class="w-7/12">
-                                            {main_threads
-                                                .into_iter()
-                                                .map(|thread: ThreadView| {
-                                                    let thread_id = thread.id.clone();
-                                                    let is_active = current_thread_id() == thread_id;
-                                                    let thread_branches: Vec<ThreadView> = branches
-                                                        .iter()
-                                                        .filter(|b| b.parent_thread_id.as_ref() == Some(&thread.id))
-                                                        .cloned()
-                                                        .collect();
-                                                    let (button_class, text_class) = if is_active {
-                                                        (
-                                                            "border-teal-500 bg-teal-600 dark:bg-teal-800",
-                                                            "text-mint-400 group-hover:text-white dark:text-mint-300 dark:group-hover:text-white",
-                                                        )
-                                                    } else {
-                                                        (
-                                                            "border-teal-700 bg-gray-300 dark:bg-teal-800 hover:border-teal-800 hover:bg-gray-900",
-                                                            "text-gray-300 group-hover:text-white dark:text-gray-100 dark:group-hover:text-white",
-                                                        )
-                                                    };
-                                                    let thread_id_for_set = thread_id.clone();
-                                                    let thread_id_for_delete = thread_id.clone();
-                                                    view! {
-                                                        <div class="thread-group mb-4">
-                                                            <div class="thread-list text-teal-500 dark:text-mint-400 flex flex-col items-start justify-center w-full mb-2">
-                                                                <div class="flex w-full justify-between items-center">
-                                                                    <button
-                                                                        class=format!(
-                                                                            "thread-item w-full p-2 border-2 {} transition duration-300 ease-in-out group",
-                                                                            button_class,
-                                                                        )
-
-                                                                        on:click=move |_| set_current_thread_id(
-                                                                            thread_id_for_set.clone(),
-                                                                        )
-                                                                    >
-
-                                                                        <div class="flex items-center">
-                                                                            <span class="mr-2">{"🧵"}</span>
-                                                                            <p class=format!(
-                                                                                "thread-id ib pr-16 md:pr-36 text-base self-start {} transition duration-300 ease-in-out",
-                                                                                text_class,
-                                                                            )>{get_display_name(&thread)}</p>
-                                                                        </div>
-                                                                        <div class="stats-for-nerds hidden group-hover:flex flex-col items-start mt-2">
-                                                                            <p class="message-created_at ir text-xs text-teal-300 dark:text-mint-200 group-hover:text-teal-100 dark:group-hover:text-mint-100">
-                                                                                created:
-                                                                                {thread
-                                                                                    .created_at
-                                                                                    .map(|dt| dt.format("%b %d, %I:%M %p").to_string())
-                                                                                    .unwrap_or_default()}
-                                                                            </p>
-                                                                        </div>
-                                                                    </button>
-                                                                    <button
-                                                                        class="delete-button ib text-teal-600 dark:text-mint-400 hover:text-teal-400 dark:hover:text-mint-300 text-sm ml-2 p-2 
-                                                                        bg-gray-400 dark:bg-teal-900 hover:bg-gray-500 dark:hover:bg-teal-800 rounded transition duration-300 ease-in-out"
-                                                                        on:click=move |_| {
-                                                                            delete_thread_action.dispatch(thread_id_for_delete.clone());
-                                                                        }
-                                                                    >
-
-                                                                        "delet"
-                                                                    </button>
-                                                                </div>
-                                                            </div>
-
-                                                            {thread_branches
-                                                                .into_iter()
-                                                                .map(|branch: ThreadView| {
-                                                                    let branch_id = branch.id.clone();
-                                                                    let is_branch_active = current_thread_id() == branch_id;
-                                                                    let (branch_button_class, branch_text_class) = if is_branch_active {
-                                                                        (
-                                                                            "border-seafoam-500 bg-seafoam-600 dark:bg-seafoam-800",
-                                                                            "text-white group-hover:text-white",
-                                                                        )
-                                                                    } else {
-                                                                        (
-                                                                            "border-gray-600 bg-gray-200 dark:bg-teal-700 hover:border-seafoam-600 hover:bg-gray-300 dark:hover:bg-teal-600",
-                                                                            "text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-white",
-                                                                        )
-                                                                    };
-                                                                    let branch_id_for_set = branch_id.clone();
-                                                                    view! {
-                                                                        <div class="branch-item ml-6 text-teal-500 dark:text-mint-400 flex flex-col items-start justify-center w-full mb-1">
-                                                                            <button
-                                                                                class=format!(
-                                                                                    "thread-item w-full p-1.5 border {} transition duration-300 ease-in-out group text-sm",
-                                                                                    branch_button_class,
-                                                                                )
-
-                                                                                on:click=move |_| set_current_thread_id(
-                                                                                    branch_id_for_set.clone(),
-                                                                                )
-                                                                            >
-
-                                                                                <div class="flex items-center">
-                                                                                    <span class="mr-2">{"🌿"}</span>
-                                                                                    <p class=format!(
-                                                                                        "branch-name ir text-sm {} transition duration-300 ease-in-out",
-                                                                                        branch_text_class,
-                                                                                    )>{get_display_name(&branch)}</p>
-                                                                                </div>
-                                                                            </button>
-                                                                        </div>
-                                                                    }
-                                                                })
-                                                                .collect_view()}
-                                                        </div>
-                                                    }
-                                                })
-                                                .collect::<Vec<_>>()}
-                                        </div>
-                                    }
-                                        .into_any()
+                                    Err(_) => Vec::new(),
                                 }
-                                Err(_e) => {
-                                    view! { <div>"Error loading threads: {e}"</div> }.into_any()
-                                }
+                            })
+                            .unwrap_or_default()
+                    }
+
+                    key=|root_node| root_node.thread.id.clone()
+                    children=move |root_node| {
+                        view! {
+                            <ThreadTreeNode
+                                node=root_node
+                                current_thread_id=current_thread_id
+                                set_current_thread_id=set_current_thread_id
+                                delete_action=delete_thread_action
+                                depth=0
+                            />
+                        }
+                    }
+                />
+
+                {move || {
+                    let resource = if !search_query.get().is_empty() {
+                        search_resource.get()
+                    } else {
+                        threads_resource.get()
+                    };
+                    if let Some(Ok(thread_list)) = resource {
+                        if thread_list.is_empty() {
+                            view! {
+                                <div class="w-7/12">
+                                    <p class="text-gray-500 dark:text-gray-400 text-sm">
+                                        "No threads found"
+                                    </p>
+                                </div>
                             }
-                        })
+                                .into_any()
+                        } else {
+                            view! { <div></div> }.into_any()
+                        }
+                    } else if let Some(Err(e)) = resource {
+                        view! {
+                            <div class="w-7/12">
+                                <div class="text-red-500 text-sm">
+                                    "Error loading threads: " {e.to_string()}
+                                </div>
+                            </div>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <div></div> }.into_any()
+                    }
                 }}
 
             </Suspense>
         </div>
     }
+}
+
+#[derive(Debug, Clone)]
+struct ThreadNode {
+    thread: ThreadView,
+    children: Vec<ThreadNode>,
+}
+
+#[component]
+fn ThreadTreeNode(
+    node: ThreadNode,
+    current_thread_id: ReadSignal<String>,
+    set_current_thread_id: WriteSignal<String>,
+    delete_action: Action<String, ()>,
+    depth: usize,
+    #[prop(optional)] is_last_child: bool,
+) -> impl IntoView {
+    let thread = node.thread.clone();
+    let thread_id = thread.id.clone();
+    let thread_id_for_memo = thread_id.clone();
+    let thread_id_for_set = thread_id.clone();
+    let thread_id_for_delete = thread_id.clone();
+    let thread_for_display = thread.clone();
+    let thread_for_styles = thread.clone();
+    
+    // Calculate indentation based on depth
+    let margin_left = format!("{}rem", depth as f32 * 1.5);
+    
+    // Use a memo for the active state to make it reactive properly
+    let is_active = Memo::new(move |_| current_thread_id.get() == thread_id_for_memo);
+    
+    // Determine styling based on whether it's a main thread or branch AND if it's active
+    let get_styles = move || {
+        let active = is_active.get();
+        let is_branch = thread_for_styles.parent_thread_id.is_some();
+        
+        if is_branch {
+            // This is a branch
+            if active {
+                (
+                    "🌿",
+                    "border-seafoam-500 bg-seafoam-600 dark:bg-seafoam-700",
+                    "text-white group-hover:text-white",
+                )
+            } else {
+                (
+                    "🌿",
+                    "border-gray-600 bg-gray-200 dark:bg-teal-700 hover:border-seafoam-600 hover:bg-gray-300 dark:hover:bg-teal-600",
+                    "text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-white",
+                )
+            }
+        } else {
+            // This is a main thread
+            if active {
+                (
+                    "🧵",
+                    "border-teal-500 bg-teal-600 dark:bg-teal-700",
+                    "text-white group-hover:text-white",
+                )
+            } else {
+                (
+                    "🧵",
+                    "border-teal-700 bg-gray-300 dark:bg-teal-800 hover:border-teal-800 hover:bg-gray-400 dark:hover:bg-gray-700",
+                    "text-gray-700 group-hover:text-white dark:text-gray-100 dark:group-hover:text-white",
+                )
+            }
+        }
+    };
+
+    let get_display_name = move |thread: &ThreadView| {
+        if let Some(branch_name) = &thread.branch_name {
+            branch_name.clone()
+        } else if thread.parent_thread_id.is_some() {
+            format!("Branch of {}", thread.parent_thread_id.as_ref().unwrap_or(&"unknown".to_string())[..8].to_string())
+        } else {
+            if thread.id.len() > 8 {
+                format!("{}...", &thread.id[..8])
+            } else {
+                thread.id.clone()
+            }
+        }
+    };
+
+    let has_children = !node.children.is_empty();
+    let children_for_each = node.children.clone();
+    let children_for_last_check = node.children.clone();
+
+    view! {
+        <div class="thread-group mb-1">
+            <div class="thread-item-container flex flex-col relative">
+                {move || {
+                    if depth > 0 {
+                        view! {
+                            <div class="absolute left-0 top-0 w-full h-full pointer-events-none">
+                                <div
+                                    class="absolute border-l-2 border-gray-400 dark:border-gray-600"
+                                    style:left=format!("{}rem", (depth as f32 - 1.0) * 1.5 + 0.75)
+                                    style:top="0"
+                                    style:height=if is_last_child { "1.5rem" } else { "100%" }
+                                ></div>
+
+                                <div
+                                    class="absolute border-t-2 border-gray-400 dark:border-gray-600"
+                                    style:left=format!("{}rem", (depth as f32 - 1.0) * 1.5 + 0.75)
+                                    style:top="1.5rem"
+                                    style:width="0.75rem"
+                                ></div>
+                            </div>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <div></div> }.into_any()
+                    }
+                }}
+                <div
+                    class="flex w-full justify-between items-center relative z-10"
+                    style:margin-left=margin_left
+                >
+                    {move || {
+                        let (icon, button_class, text_class) = get_styles();
+                        let thread_id_for_click = thread_id_for_set.clone();
+                        
+                        view! {
+                            <button
+                                class=format!(
+                                    "thread-item w-full p-2 border-2 {} transition duration-300 ease-in-out group text-sm relative",
+                                    button_class,
+                                )
+                                on:click=move |_| {
+                                    log::info!("Clicked thread: {}", thread_id_for_click);
+                                    set_current_thread_id(thread_id_for_click.clone());
+                                }
+                            >
+                                <div class="flex items-center">
+                                    <span class="mr-2">{icon}</span>
+                                    <p class=format!(
+                                        "thread-name ib text-sm {} transition duration-300 ease-in-out",
+                                        text_class,
+                                    )>{get_display_name(&thread_for_display)}</p>
+                                </div>
+                                <div class="stats-for-nerds hidden group-hover:flex flex-col items-start mt-2">
+                                    <p class="thread-created_at ir text-xs text-teal-300 dark:text-mint-200 group-hover:text-teal-100 dark:group-hover:text-mint-100">
+                                        created:
+                                        {thread_for_display
+                                            .created_at
+                                            .map(|dt| dt.format("%b %d, %I:%M %p").to_string())
+                                            .unwrap_or_default()}
+                                    </p>
+                                </div>
+                            </button>
+                        }
+                    }}
+
+                    <button
+                        class="delete-button ib text-teal-600 dark:text-mint-400 hover:text-teal-400 dark:hover:text-mint-300 text-sm ml-2 p-2 
+                        bg-gray-400 dark:bg-teal-900 hover:bg-gray-500 dark:hover:bg-teal-800 rounded transition duration-300 ease-in-out relative z-10"
+                        on:click=move |_| {
+                            delete_action.dispatch(thread_id_for_delete.clone());
+                        }
+                    >
+                        "delet"
+                    </button>
+                </div>
+                {move || {
+                    if has_children {
+                        view! {
+                            <div
+                                class="absolute border-l-2 border-gray-400 dark:border-gray-600 pointer-events-none"
+                                style:left=format!("{}rem", depth as f32 * 1.5 + 0.75)
+                                style:top="3rem"
+                                style:bottom="0"
+                            ></div>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <div></div> }.into_any()
+                    }
+                }}
+                <div class="children-container">
+                    <For
+                        each=move || children_for_each.clone()
+                        key=|child| child.thread.id.clone()
+                        children=move |child_node| {
+                            let is_last = {
+                                let children = children_for_last_check.clone();
+                                let child_id = child_node.thread.id.clone();
+                                children
+                                    .last()
+                                    .map(|last| last.thread.id == child_id)
+                                    .unwrap_or(false)
+                            };
+                            view! {
+                                <ThreadTreeNode
+                                    node=child_node
+                                    current_thread_id=current_thread_id
+                                    set_current_thread_id=set_current_thread_id
+                                    delete_action=delete_action
+                                    depth=depth + 1
+                                    is_last_child=is_last
+                                />
+                            }
+                        }
+                    />
+                </div>
+            </div>
+        </div>
+    }.into_any()
 }
 
 #[server(SearchThreads, "/api")]
@@ -568,7 +742,7 @@ pub async fn create_branch(
                 // If this is a branch, get messages from this thread up to (but not including) the branch point
                 messages::table
                     .filter(messages::thread_id.eq(thread_id))
-                    .filter(messages::id.lt(branch_point_message_id)) // Changed from .le to .lt
+                    .filter(messages::id.lt(branch_point_message_id))
                     .order(messages::id.asc())
                     .load::<Message>(conn)
                     .await?
@@ -576,7 +750,7 @@ pub async fn create_branch(
                 // If this is a root thread, get messages up to (but not including) the branch point
                 messages::table
                     .filter(messages::thread_id.eq(thread_id))
-                    .filter(messages::id.lt(branch_point_message_id)) // Changed from .le to .lt
+                    .filter(messages::id.lt(branch_point_message_id))
                     .order(messages::id.asc())
                     .load::<Message>(conn)
                     .await?
