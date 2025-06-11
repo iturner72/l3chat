@@ -36,14 +36,13 @@ pub fn MessageList(
         }
     );
 
-    let create_branch_action = Action::new(move |(message_id, model, lab): &(i32, String, String)| {
+    let create_branch_action = Action::new(move |(message_id, model): &(i32, String)| {
         let message_id = *message_id;
         let model = model.clone();
-        let lab = lab.clone();
         let thread_id = current_thread_id.get();
         
         async move {
-            match create_branch(thread_id, message_id, model.clone(), lab, None).await {
+            match create_branch(thread_id, message_id, model.clone(), None).await {
                 Ok(new_thread_id) => {
                     log::info!("Created branch: {}", new_thread_id);
                     set_current_thread_id.set(new_thread_id);
@@ -246,7 +245,6 @@ pub fn MessageList(
                                                                                         .dispatch((
                                                                                             message.id,
                                                                                             "claude-3-5-sonnet-20240620".to_string(),
-                                                                                            "anthropic".to_string(),
                                                                                         ));
                                                                                 }
                                                                             >
@@ -265,11 +263,7 @@ pub fn MessageList(
                                                                                 disabled=move || create_branch_action.pending().get()
                                                                                 on:click=move |_| {
                                                                                     create_branch_action
-                                                                                        .dispatch((
-                                                                                            message.id,
-                                                                                            "gpt-4o".to_string(),
-                                                                                            "openai".to_string(),
-                                                                                        ));
+                                                                                        .dispatch((message.id, "gpt-4o".to_string()));
                                                                                 }
                                                                             >
 
@@ -287,11 +281,7 @@ pub fn MessageList(
                                                                                 disabled=move || create_branch_action.pending().get()
                                                                                 on:click=move |_| {
                                                                                     create_branch_action
-                                                                                        .dispatch((
-                                                                                            message.id,
-                                                                                            "gpt-4o-mini".to_string(),
-                                                                                            "openai".to_string(),
-                                                                                        ));
+                                                                                        .dispatch((message.id, "gpt-4o-mini".to_string()));
                                                                                 }
                                                                             >
 

@@ -20,7 +20,7 @@ cfg_if! {
         use std::task::{Context, Poll};
         use tokio::sync::mpsc;
         use futures::stream::{Stream, StreamExt};
-        use log::info;
+        use log::{debug, info};
 
         use crate::database::db::DbPool;
         use crate::models::conversations::Message;
@@ -97,7 +97,7 @@ cfg_if! {
                     match item {
                         Ok(bytes) => {
                             let event = String::from_utf8(bytes.to_vec()).map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
-                            info!("Trimmed event: {}", event.trim());
+                            debug!("Trimmed event: {}", event.trim());
 
                             for line in event.trim().lines() {
                                 if line.trim() == "event: message_stop" {
@@ -108,7 +108,7 @@ cfg_if! {
                                     let json_str = &line.trim()[6..];
                                     for cap in re.captures_iter(json_str) {
                                         let content = cap[1].to_string();
-                                        info!("Extracted content: {content}");
+                                        debug!("Extracted content: {content}");
                                         tx.send(Ok(Event::default().data(content))).await.ok();
                                     }
                                 }
@@ -174,7 +174,7 @@ cfg_if! {
                     match item {
                         Ok(bytes) => {
                             let event = String::from_utf8(bytes.to_vec()).map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
-                            info!("Trimmed event: {}", event.trim());
+                            debug!("Trimmed event: {}", event.trim());
 
                             for line in event.trim().lines() {
                                 if line.trim() == "data: [DONE]" {
@@ -260,13 +260,26 @@ cfg_if! {
 #[component]
 pub fn Chat(
     thread_id: ReadSignal<String>,
-    model: ReadSignal<String>,
-    lab: ReadSignal<String>
 ) -> impl IntoView {
     let (message, set_message) = signal(String::new());
     let (response, set_response) = signal(String::new());
     let (is_sending, set_is_sending) = signal(false);
     let (llm_content, set_llm_content) = signal(String::new());
+    
+    let (model, set_model) = signal("gpt-4o-mini".to_string());
+    let (lab, set_lab) = signal("openai".to_string());
+
+    let handle_model_change = move |ev| {
+        let value = event_target_value(&ev);
+        set_model(value.clone());
+    
+        let new_lab = if value.contains("claude") {
+            "anthropic"
+        } else {
+            "openai"
+        };
+        set_lab(new_lab.to_string());
+    };
 
     let send_message_action = move |_| {
         let message_value = message.get();
@@ -281,7 +294,6 @@ pub fn Chat(
             set_llm_content.set("".to_string());
             let is_llm = false;
 
-            // Get current user to extract user_id
             let user_id = match get_current_user().await {
                 Ok(Some(user)) => Some(user.id),
                 _ => None,
@@ -398,38 +410,60 @@ pub fn Chat(
 
                 </Suspense>
             </div>
-            <div class="flex flex-row justify-center space-x-4 w-6/12 md:w-7/12">
-                <textarea
-                    class="ir text-sm text-gray-800 dark:text-gray-200 bg-gray-100 dark:bg-teal-800 w-full h-8 md:h-12 p-2 text-wrap
-                    border-2 border-teal-600 dark:border-seafoam-600 focus:border-seafoam-500 dark:focus:border-aqua-500 focus:outline-none
-                    transition duration-300 ease-in-out resize-none rounded-md"
-                    prop:value=message
-                    on:input=move |event| {
-                        set_message(event_target_value(&event));
-                        let target = event.target().unwrap();
-                        let style = target.unchecked_ref::<HtmlElement>().style();
-                        style.set_property("height", "auto").unwrap();
-                        style
-                            .set_property(
-                                "height",
-                                &format!(
-                                    "{}px",
-                                    target.unchecked_ref::<HtmlElement>().scroll_height(),
-                                ),
-                            )
-                            .unwrap();
-                    }
-                >
-                </textarea>
-                <button
-                    class="ib text-white bg-seafoam-600 hover:bg-seafoam-700 dark:bg-teal-600 dark:hover:bg-teal-700
-                    text-xs md:text-lg w-1/6 p-2 rounded-md transition duration-300 ease-in-out
-                    disabled:bg-gray-400 dark:disabled:bg-teal-900 disabled:text-gray-600 dark:disabled:text-teal-400 disabled:cursor-not-allowed"
-                    on:click=send_message_action
-                    disabled=move || is_sending.get()
-                >
-                    {move || if is_sending.get() { "yapping..." } else { "yap" }}
-                </button>
+            <div class="flex flex-col items-start justify-center space-y-2 w-6/12 md:w-7/12">
+                <div class="flex flex-row justify-center space-x-4 w-full">
+                    <textarea
+                        class="ir text-sm text-gray-800 dark:text-gray-200 bg-gray-100 dark:bg-teal-800 w-full h-8 md:h-12 p-2 text-wrap
+                        border-0 border-teal-600 dark:border-seafoam-600 focus:border-seafoam-500 dark:focus:border-aqua-500 focus:outline-none
+                        transition duration-100 ease-in-out resize-none"
+                        prop:value=message
+                        on:input=move |event| {
+                            set_message(event_target_value(&event));
+                            let target = event.target().unwrap();
+                            let style = target.unchecked_ref::<HtmlElement>().style();
+                            style.set_property("height", "auto").unwrap();
+                            style
+                                .set_property(
+                                    "height",
+                                    &format!(
+                                        "{}px",
+                                        target.unchecked_ref::<HtmlElement>().scroll_height(),
+                                    ),
+                                )
+                                .unwrap();
+                        }
+                    >
+                    </textarea>
+                    <button
+                        class="ib text-white bg-seafoam-600 hover:bg-seafoam-700 dark:bg-teal-600 dark:hover:bg-teal-700
+                        text-xs md:text-lg w-1/6 p-2 transition duration-100 ease-in-out
+                        disabled:bg-gray-400 dark:disabled:bg-teal-900 disabled:text-gray-600 dark:disabled:text-teal-400 disabled:cursor-not-allowed"
+                        on:click=send_message_action
+                        disabled=move || is_sending.get()
+                    >
+                        {move || if is_sending.get() { "yapping..." } else { "yap" }}
+                    </button>
+                </div>
+
+                <div class="flex justify-center">
+                    <select
+                        class="ib text-xs md:text-sm 
+                        text-gray-900 dark:text-gray-100 hover:text-gray-800 dark:hover:text-gray-200 p-2 border-0 
+                        bg-gray-300 dark:bg-teal-700 hover:bg-gray-400 dark:hover:bg-teal-600 
+                        border-gray-700 dark:border-gray-600 hover:border-gray-900 dark:hover:border-gray-400
+                        transition duration-100 ease-in-out"
+                        on:change=handle_model_change
+                        prop:value=move || model.get()
+                    >
+                        <option value="claude-3-haiku-20240307">"claude-3-haiku"</option>
+                        <option value="claude-3-sonnet-20240229">"claude-3-sonnet"</option>
+                        <option value="claude-3-opus-20240229">"claude-3-opus"</option>
+                        <option value="claude-3-5-sonnet-20240620">"claude-3-5-sonnet"</option>
+                        <option value="gpt-4o-mini">"gpt-4o-mini"</option>
+                        <option value="gpt-4o">"gpt-4o"</option>
+                        <option value="gpt-4-turbo">"gpt-4-turbo"</option>
+                    </select>
+                </div>
             </div>
         </div>
     }

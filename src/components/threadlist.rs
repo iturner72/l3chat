@@ -8,7 +8,6 @@ use crate::models::conversations::ThreadView;
 pub fn ThreadList(
     current_thread_id: ReadSignal<String>,
     set_current_thread_id: WriteSignal<String>,
-    _lab: ReadSignal<String> // will use later
 ) -> impl IntoView {
     // Use Resource instead of spawn_local for SSR compatibility
     let threads_resource = Resource::new(
@@ -119,14 +118,28 @@ pub fn ThreadList(
 
     view! {
         <div class="thread-list-container flex flex-col items-start pt-2">
-            <input
-                type="text"
-                placeholder="grep threads!"
-                on:input=handle_search
-                class="grep-box w-7/12 p-2 mb-2 bg-gray-100 dark:bg-teal-800 text-teal-600 dark:text-mint-400
-                border-2 border-gray-300 dark:border-teal-600 focus:border-teal-500 dark:focus:border-mint-300
-                focus:outline-none transition duration-300 ease-in-out"
-            />
+            <div class="relative flex items-center w-7/12">
+                <input
+                    type="text"
+                    placeholder="grep threads"
+                    on:input=handle_search
+                    class="grep-box w-full pr-10 p-2 mb-2 bg-gray-100 dark:bg-teal-800 text-teal-600 dark:text-mint-400
+                    border-0 border-gray-300 dark:border-teal-600 focus:border-teal-500 dark:focus:border-mint-300
+                    focus:outline-none transition duration-300 ease-in-out"
+                />
+                <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    class="h-5 w-5 absolute right-3 text-gray-400 dark:text-teal-500"
+                    viewBox="0 1 20 20"
+                    fill="currentColor"
+                >
+                    <path
+                        fill-rule="evenodd"
+                        d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
+                        clip-rule="evenodd"
+                    ></path>
+                </svg>
+            </div>
 
             <Suspense fallback=move || {
                 view! {
@@ -329,18 +342,19 @@ fn ThreadTreeNode(
                     {move || {
                         let (icon, button_class, text_class) = get_styles();
                         let thread_id_for_click = thread_id_for_set.clone();
-                        
                         view! {
                             <button
                                 class=format!(
-                                    "thread-item w-full p-2 border-2 {} transition duration-300 ease-in-out group text-sm relative",
+                                    "thread-item w-full p-2 border-0 {} transition duration-300 ease-in-out group text-sm relative",
                                     button_class,
                                 )
+
                                 on:click=move |_| {
                                     log::info!("Clicked thread: {}", thread_id_for_click);
                                     set_current_thread_id(thread_id_for_click.clone());
                                 }
                             >
+
                                 <div class="flex items-center">
                                     <span class="mr-2">{icon}</span>
                                     <p class=format!(
@@ -368,6 +382,7 @@ fn ThreadTreeNode(
                             delete_action.dispatch(thread_id_for_delete.clone());
                         }
                     >
+
                         "delet"
                     </button>
                 </div>
@@ -411,6 +426,7 @@ fn ThreadTreeNode(
                             }
                         }
                     />
+
                 </div>
             </div>
         </div>
@@ -647,7 +663,6 @@ pub async fn create_branch(
     source_thread_id: String,
     branch_point_message_id: i32,
     target_model: String,
-    _target_lab: String,
     branch_name: Option<String>,
 ) -> Result<String, ServerFnError> {
     use diesel::prelude::*;

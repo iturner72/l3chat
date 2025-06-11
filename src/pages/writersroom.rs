@@ -8,8 +8,6 @@ use crate::components::toast::Toast;
 #[component]
 pub fn WritersRoom() -> impl IntoView {
     let (show_threads, set_show_threads) = signal(false);
-    let (model, set_model) = signal("gpt-4o-mini".to_string());
-    let (lab, set_lab) = signal("openai".to_string());
     let (thread_id, set_thread_id) = signal("0001".to_string());
     let (toast_visible, set_toast_visible) = signal(false);
     let (toast_message, set_toast_message) = signal(String::new());
@@ -18,18 +16,6 @@ pub fn WritersRoom() -> impl IntoView {
         || (),
         |_| async move { get_threads().await }
     );
-
-    let handle_model_change = move |ev| {
-        let value = event_target_value(&ev);
-        set_model(value.clone());
-    
-        let new_lab = if value.contains("claude") {
-            "anthropic"
-        } else {
-            "openai"
-        };
-        set_lab(new_lab.to_string());
-    };
 
     let create_new_thread = Action::new(move |_: &()| {
         async move {
@@ -70,38 +56,22 @@ pub fn WritersRoom() -> impl IntoView {
             <div class="flex flex-row items-center justify-between">
                 <div class="flex flex-row items-center justify-center space-x-4">
                     <button
-                        class="self-start ib text-xs md:text-sm text-gray-900 dark:text-gray-100 hover:text-gray-800 dark:hover:text-gray-200 p-2 border-2 bg-gray-300 dark:bg-teal-700 hover:bg-gray-400 dark:hover:bg-teal-600 border-gray-700 dark:border-gray-600 hover:border-gray-900 dark:hover:border-gray-400"
+                        class="self-start ib text-xs md:text-sm text-gray-900 dark:text-gray-100 hover:text-gray-800 dark:hover:text-gray-200 p-2 border-1 bg-gray-300 dark:bg-teal-700 hover:bg-gray-400 dark:hover:bg-teal-600 border-gray-700 dark:border-gray-600 hover:border-gray-900 dark:hover:border-gray-400"
                         on:click=move |_| set_show_threads.update(|v| *v = !*v)
                     >
-                        {move || if show_threads.get() { "hide threads" } else { "show threads" }}
+                        {move || if show_threads.get() { "←" } else { "→" }}
                     </button>
                     <button
-                        class="ib text-xs md:text-sm text-teal-700 dark:text-teal-100 hover:text-teal-600 dark:hover:text-teal-200 p-2 border-2 bg-gray-300 dark:bg-teal-700 hover:bg-gray-400 dark:hover:bg-teal-600 border-gray-700 dark:border-gray-600 hover:border-gray-900 dark:hover:border-gray-400"
+                        class="ib text-xs md:text-sm text-teal-700 dark:text-teal-100 hover:text-teal-600 dark:hover:text-teal-200 p-2 pl-3 pr-3 border-1 bg-gray-300 dark:bg-teal-700 hover:bg-gray-400 dark:hover:bg-teal-600 border-gray-700 dark:border-gray-600 hover:border-gray-900 dark:hover:border-gray-400"
                         on:click=move |_| {
                             create_new_thread.dispatch(());
                         }
                     >
 
-                        "mew"
+                        "+"
+
                     </button>
                 </div>
-                <select
-                    class="self-start ib text-xs md:text-sm 
-                    text-gray-900 dark:text-gray-100 hover:text-gray-800 dark:hover:text-gray-200 p-2 border-2 
-                    bg-gray-300 dark:bg-teal-700 hover:bg-gray-400 dark:hover:bg-teal-600 
-                    border-gray-700 dark:border-gray-600 hover:border-gray-900 dark:hover:border-gray-400"
-                    on:change=handle_model_change
-                >
-                    <option value="claude-3-haiku-20240307">"claude-3-haiku"</option>
-                    <option value="claude-3-sonnet-20240229">"claude-3-sonnet"</option>
-                    <option value="claude-3-opus-20240229">"claude-3-opus"</option>
-                    <option value="claude-3-5-sonnet-20240620">"claude-3-5-sonnet"</option>
-                    <option value="gpt-4o-mini" selected="selected">
-                        "gpt-4o-mini"
-                    </option>
-                    <option value="gpt-4o">"gpt-4o"</option>
-                    <option value="gpt-4-turbo">"gpt-4-turbo"</option>
-                </select>
             </div>
             <div class="flex flex-row items-start justify-between">
                 <div class=move || {
@@ -126,15 +96,14 @@ pub fn WritersRoom() -> impl IntoView {
                                                     <ThreadList
                                                         current_thread_id=thread_id
                                                         set_current_thread_id=set_thread_id
-                                                        _lab=lab
                                                     />
                                                 </div>
                                             }
                                                 .into_any()
                                         }
-                                        Err(_e) => {
+                                        Err(e) => {
                                             view! {
-                                                <div>"error loading threads: {e}"</div>
+                                                <div>{"error loading threads: "} {e.to_string()}</div>
                                             }
                                                 .into_any()
                                         }
@@ -152,7 +121,7 @@ pub fn WritersRoom() -> impl IntoView {
                             visible=toast_visible
                             on_close=move || set_toast_visible(false)
                         />
-                        <Chat thread_id=thread_id model=model lab=lab/>
+                        <Chat thread_id=thread_id/>
                     </div>
                 </div>
             </div>
@@ -228,4 +197,3 @@ pub async fn create_thread() -> Result<String, ServerFnError> {
 
     Ok(new_thread.id)
 }
-
