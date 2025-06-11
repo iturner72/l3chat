@@ -185,7 +185,7 @@ cfg_if! {
                                     let json_str = &line.trim()[6..];
                                     for cap in re.captures_iter(json_str) {
                                         let content = cap[1].to_string();
-                                        info!("Extracted content: {content}");
+                                        debug!("Extracted content: {content}");
                                         tx.send(Ok(Event::default().data(content))).await.ok();
                                     }
                                 }

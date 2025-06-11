@@ -258,7 +258,7 @@ fn ThreadTreeNode(
         let is_branch = thread_for_styles.parent_thread_id.is_some();
         
         if is_branch {
-            // This is a branch
+            // This is a branch - always use branch emoji
             if active {
                 (
                     "🌿",
@@ -273,7 +273,7 @@ fn ThreadTreeNode(
                 )
             }
         } else {
-            // This is a main thread
+            // This is a main thread - use thread emoji
             if active {
                 (
                     "🧵",
@@ -292,10 +292,13 @@ fn ThreadTreeNode(
 
     let get_display_name = move |thread: &ThreadView| {
         if let Some(branch_name) = &thread.branch_name {
-            branch_name.clone()
+            // For branches, just show the branch emoji and number
+            format!("branch {}", branch_name)
         } else if thread.parent_thread_id.is_some() {
-            format!("Branch of {}", thread.parent_thread_id.as_ref().unwrap_or(&"unknown".to_string())[..8].to_string())
+            // Fallback for branches without explicit names
+            "branch".to_string()
         } else {
+            // For main threads, show truncated thread ID
             if thread.id.len() > 8 {
                 format!("{}...", &thread.id[..8])
             } else {
@@ -383,7 +386,7 @@ fn ThreadTreeNode(
                         }
                     >
 
-                        "delet"
+                        "x"
                     </button>
                 </div>
                 {move || {
@@ -662,8 +665,7 @@ pub async fn get_threads() -> Result<Vec<ThreadView>, ServerFnError> {
 pub async fn create_branch(
     source_thread_id: String,
     branch_point_message_id: i32,
-    target_model: String,
-    branch_name: Option<String>,
+    _branch_name: Option<String>, // Optional parameter for custom naming
 ) -> Result<String, ServerFnError> {
     use diesel::prelude::*;
     use diesel_async::{RunQueryDsl, AsyncConnection};
@@ -787,6 +789,29 @@ pub async fn create_branch(
                 .optional()?
                 .ok_or(BranchError::NotFound)?;
 
+            // Get ALL branch names for this user to find the highest number used
+            let all_branch_names: Vec<Option<String>> = threads::table
+                .filter(threads::user_id.eq(user_id))
+                .filter(threads::parent_thread_id.is_not_null()) // Only branches
+                .select(threads::branch_name)
+                .load(conn)
+                .await?;
+
+            // Find the highest existing branch number across all user's branches
+            let mut highest_branch_number = 0;
+            for branch_name_opt in all_branch_names {
+                if let Some(branch_name) = branch_name_opt {
+                    if let Ok(num) = branch_name.parse::<i32>() {
+                        if num > highest_branch_number {
+                            highest_branch_number = num;
+                        }
+                    }
+                }
+            }
+
+            // Generate next sequential branch name
+            let branch_name = format!("{}", highest_branch_number + 1);
+
             // Get the full conversation history up to the branch point
             let messages_to_copy = get_full_conversation_history(
                 conn,
@@ -806,9 +831,7 @@ pub async fn create_branch(
                 user_id: Some(user_id),
                 parent_thread_id: Some(source_thread_id_clone.clone()),
                 branch_point_message_id: Some(branch_point_message_id),
-                branch_name: branch_name.or_else(|| {
-                    Some(format!("{} branch", target_model))
-                }),
+                branch_name: Some(branch_name),
             };
 
             diesel::insert_into(threads::table)
@@ -850,7 +873,7 @@ pub async fn get_thread_branches(thread_id: String) -> Result<Vec<crate::models:
     use std::error::Error;
     use crate::state::AppState;
     use crate::models::conversations::Thread;
-    use crate::schema::{threads, messages};
+    use crate::schema::threads;
     use crate::auth::get_current_user;
     
     #[derive(Debug)]
@@ -890,44 +913,33 @@ pub async fn get_thread_branches(thread_id: String) -> Result<Vec<crate::models:
         .await
         .map_err(|e| BranchError::Pool(e.to_string()))?;
     
-    // Find all branches of this thread
-    let branches = threads::table
+    // Find all branches of this thread, ordered by branch_name as integer
+    let mut branches = threads::table
         .filter(threads::parent_thread_id.eq(&thread_id))
         .filter(threads::user_id.eq(user_id))
         .order(threads::created_at.desc())
         .load::<Thread>(&mut conn)
         .await
         .map_err(BranchError::Database)?;
+
+    // Sort by branch_name as integers (1, 2, 3, etc.)
+    branches.sort_by(|a, b| {
+        let a_num: i32 = a.branch_name.as_ref().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let b_num: i32 = b.branch_name.as_ref().and_then(|s| s.parse().ok()).unwrap_or(0);
+        a_num.cmp(&b_num)
+    });
     
-    // Convert to BranchInfo - we'll need to get the first assistant message from each branch
-    // to determine the model/lab used
-    let mut branch_infos = Vec::new();
-    
-    for branch in branches {
-        // Get the first assistant message to determine model/lab
-        let first_assistant_msg = messages::table
-            .filter(messages::thread_id.eq(&branch.id))
-            .filter(messages::role.eq("assistant"))
-            .order(messages::id.asc())
-            .first::<crate::models::conversations::Message>(&mut conn)
-            .await
-            .optional()
-            .map_err(BranchError::Database)?;
-            
-        let (model, lab) = if let Some(msg) = first_assistant_msg {
-            (msg.active_model, msg.active_lab)
-        } else {
-            ("unknown".to_string(), "unknown".to_string())
-        };
-        
-        branch_infos.push(crate::models::conversations::BranchInfo {
+    // Convert to BranchInfo with simplified data
+    let branch_infos: Vec<crate::models::conversations::BranchInfo> = branches
+        .into_iter()
+        .map(|branch| crate::models::conversations::BranchInfo {
             thread_id: branch.id,
             branch_name: branch.branch_name,
-            model,
-            lab,
+            model: "mixed".to_string(), // Since branches can have multiple models
+            lab: "mixed".to_string(),   // Since branches can have multiple labs
             created_at: branch.created_at.map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
-        });
-    }
+        })
+        .collect();
     
     Ok(branch_infos)
 }

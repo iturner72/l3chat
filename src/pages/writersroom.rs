@@ -54,7 +54,7 @@ pub fn WritersRoom() -> impl IntoView {
     view! {
         <div class="w-full flex flex-col bg-gray-300 dark:bg-teal-900 justify-start pt-2 pl-2 pr-2 h-full">
             <div class="flex flex-row items-center justify-between">
-                <div class="flex flex-row items-center justify-center space-x-4">
+                <div class="flex flex-row items-center justify-center space-x-2">
                     <button
                         class="self-start ib text-xs md:text-sm text-gray-900 dark:text-gray-100 hover:text-gray-800 dark:hover:text-gray-200 p-2 border-1 bg-gray-300 dark:bg-teal-700 hover:bg-gray-400 dark:hover:bg-teal-600 border-gray-700 dark:border-gray-600 hover:border-gray-900 dark:hover:border-gray-400"
                         on:click=move |_| set_show_threads.update(|v| *v = !*v)
