@@ -260,6 +260,7 @@ cfg_if! {
 #[component]
 pub fn Chat(
     thread_id: ReadSignal<String>,
+    #[prop(optional)] on_message_created: Option<Callback<()>>,
 ) -> impl IntoView {
     let (message, set_message) = signal(String::new());
     let (response, set_response) = signal(String::new());
@@ -310,6 +311,11 @@ pub fn Chat(
 
             match create_message(new_message_view, is_llm).await {
                 Ok(_) => {
+                    set_message.set(String::new());
+                    
+                    if let Some(callback) = on_message_created {
+                        callback.run(());
+                    }
 
                     let thread_id_value = thread_id().to_string();
                     let active_model_value = model().to_string();
@@ -323,6 +329,7 @@ pub fn Chat(
         
         			let on_message = {
         				let event_source = Rc::clone(&event_source);
+                        let on_message_created_clone = on_message_created;
         				Closure::wrap(Box::new(move |event: MessageEvent| {
         					let data = event.data().as_string().unwrap();
         					if data == "[DONE]" {
@@ -340,6 +347,10 @@ pub fn Chat(
                                 spawn_local(async move {
                                     if let Err(e) = create_message(new_message_view, is_llm).await {
                                         error!("Failed to create LLM message: {e:?}");
+                                    } else {
+                                        if let Some(callback) = on_message_created_clone {
+                                            callback.run(());
+                                        }
                                     }
                                 });
 

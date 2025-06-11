@@ -11,6 +11,7 @@ pub fn WritersRoom() -> impl IntoView {
     let (thread_id, set_thread_id) = signal("0001".to_string());
     let (toast_visible, set_toast_visible) = signal(false);
     let (toast_message, set_toast_message) = signal(String::new());
+    let (message_refetch_trigger, set_message_refetch_trigger) = signal(0);
 
     let threads = Resource::new(
         || (),
@@ -26,6 +27,7 @@ pub fn WritersRoom() -> impl IntoView {
                     set_toast_visible(true);
 
                     threads.refetch();
+                    set_message_refetch_trigger.update(|n| *n += 1);
                     
                     set_timeout(
                         move || set_toast_visible(false),
@@ -37,6 +39,15 @@ pub fn WritersRoom() -> impl IntoView {
                 Err(e) => Err(format!("Failed to create thread: {e}"))
             }
         }
+    });
+
+    let on_message_created = Callback::new(move |_: ()| {
+        set_message_refetch_trigger.update(|n| *n += 1);
+    });
+
+    let thread_switch_callback = Callback::new(move |new_id: String| {
+        set_thread_id.set(new_id);
+        set_message_refetch_trigger.update(|n| *n += 1);
     });
 
     Effect::new(move |_| {
@@ -52,7 +63,7 @@ pub fn WritersRoom() -> impl IntoView {
     });
 
     view! {
-        <div class="w-full flex flex-col bg-gray-300 dark:bg-teal-900 justify-start pt-2 pl-2 pr-2 h-full">
+        <div class="w-full flex flex-col bg-gray-300 dark:bg-teal-900 justify-start pt-2 pl-2 pr-2 h-screen">
             <div class="flex flex-row items-center justify-between">
                 <div class="flex flex-row items-center justify-center space-x-2">
                     <button
@@ -95,7 +106,7 @@ pub fn WritersRoom() -> impl IntoView {
                                                 <div>
                                                     <ThreadList
                                                         current_thread_id=thread_id
-                                                        set_current_thread_id=set_thread_id
+                                                        set_current_thread_id=thread_switch_callback
                                                     />
                                                 </div>
                                             }
@@ -114,14 +125,21 @@ pub fn WritersRoom() -> impl IntoView {
                     </Suspense>
                 </div>
                 <div class="w-full flex flex-col content-end justify-between h-[calc(80vh-10px)]">
-                    <MessageList current_thread_id=thread_id set_current_thread_id=set_thread_id/>
+                    <MessageList 
+                        current_thread_id=thread_id 
+                        set_current_thread_id=set_thread_id
+                        refetch_trigger=message_refetch_trigger
+                    />
                     <div class="relative text-gray-900 dark:text-gray-100">
                         <Toast
                             message=toast_message
                             visible=toast_visible
                             on_close=move || set_toast_visible(false)
                         />
-                        <Chat thread_id=thread_id/>
+                        <Chat 
+                            thread_id=thread_id
+                            on_message_created=on_message_created
+                        />
                     </div>
                 </div>
             </div>

@@ -7,7 +7,8 @@ use crate::models::conversations::ThreadView;
 #[component]
 pub fn ThreadList(
     current_thread_id: ReadSignal<String>,
-    set_current_thread_id: WriteSignal<String>,
+    // Change to accept a callback instead of WriteSignal directly
+    #[prop(into)] set_current_thread_id: Callback<String>,
 ) -> impl IntoView {
     // Use Resource instead of spawn_local for SSR compatibility
     let threads_resource = Resource::new(
@@ -46,10 +47,10 @@ pub fn ThreadList(
                         match get_threads().await {
                             Ok(updated_threads) => {
                                 if let Some(next_thread) = updated_threads.first() {
-                                    set_current_thread_id(next_thread.id.clone());
+                                    set_current_thread_id.run(next_thread.id.clone());
                                 } else {
                                     log::info!("no threads left gang");
-                                    set_current_thread_id(String::new());
+                                    set_current_thread_id.run(String::new());
                                 }
                             }
                             Err(e) => {
@@ -233,7 +234,7 @@ struct ThreadNode {
 fn ThreadTreeNode(
     node: ThreadNode,
     current_thread_id: ReadSignal<String>,
-    set_current_thread_id: WriteSignal<String>,
+    #[prop(into)] set_current_thread_id: Callback<String>,
     delete_action: Action<String, ()>,
     depth: usize,
     #[prop(optional)] is_last_child: bool,
@@ -354,7 +355,7 @@ fn ThreadTreeNode(
 
                                 on:click=move |_| {
                                     log::info!("Clicked thread: {}", thread_id_for_click);
-                                    set_current_thread_id(thread_id_for_click.clone());
+                                    set_current_thread_id.run(thread_id_for_click.clone());
                                 }
                             >
 

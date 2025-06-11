@@ -9,13 +9,21 @@ use crate::components::threadlist::{create_branch, get_thread_branches};
 pub fn MessageList(
     current_thread_id: ReadSignal<String>,
     set_current_thread_id: WriteSignal<String>,
+    #[prop(optional)] refetch_trigger: Option<ReadSignal<i32>>,
 ) -> impl IntoView {
-    let (refetch_trigger, set_refetch_trigger) = signal(0);
+    // Create a signal to track refetch triggers
+    let (internal_refetch_trigger, set_internal_refetch_trigger) = signal(0);
 
-    // Make resources reactive to the trigger
+    // Combine external and internal triggers
+    let combined_trigger = move || {
+        let internal = internal_refetch_trigger.get();
+        let external = refetch_trigger.map(|t| t.get()).unwrap_or(0);
+        (current_thread_id.get(), internal, external)
+    };
+
     let messages_resource = Resource::new(
-        move || (current_thread_id.get(), refetch_trigger.get()),
-        |(thread_id, _)| async move { 
+        combined_trigger,
+        |(thread_id, _, _)| async move { 
             if thread_id.is_empty() {
                 Ok(Vec::new())
             } else {
@@ -25,8 +33,8 @@ pub fn MessageList(
     );
 
     let branches_resource = Resource::new(
-        move || (current_thread_id.get(), refetch_trigger.get()),
-        |(thread_id, _)| async move {
+        combined_trigger,
+        |(thread_id, _, _)| async move {
             if !thread_id.is_empty() {
                 get_thread_branches(thread_id).await.unwrap_or_default()
             } else {
@@ -40,13 +48,12 @@ pub fn MessageList(
         let thread_id = current_thread_id.get();
         
         async move {
-            // Create branch with no model specified - will use integer naming
             match create_branch(thread_id, message_id, None).await {
                 Ok(new_thread_id) => {
                     log::info!("Created branch: {}", new_thread_id);
                     set_current_thread_id.set(new_thread_id);
-                    // Trigger refetch instead of manual refetch calls
-                    set_refetch_trigger.update(|n| *n += 1);
+                    // Trigger internal refetch
+                    set_internal_refetch_trigger.update(|n| *n += 1);
                     Ok(())
                 }
                 Err(e) => {
@@ -59,8 +66,8 @@ pub fn MessageList(
 
     view! {
         <div class="message-list h-108 md:h-172 space-y-8 overflow-hidden hover:overflow-y-auto flex flex-col">
-            // Wrap branch navigation in its own Suspense
-            <Suspense fallback=move || {
+            // Wrap branch navigation in its own Transition
+            <Transition fallback=move || {
                 view! {
                     <div class="branch-navigation p-2 bg-gray-200 dark:bg-teal-700 rounded-md mb-4">
                         <div class="animate-pulse bg-gray-300 dark:bg-teal-600 h-8 rounded"></div>
@@ -116,9 +123,9 @@ pub fn MessageList(
                         .unwrap_or_else(|| view! { <div></div> }.into_any())
                 }}
 
-            </Suspense>
+            </Transition>
 
-            <Suspense fallback=move || {
+            <Transition fallback=move || {
                 view! {
                     <div class="space-y-4">
                         <div class="animate-pulse bg-gray-200 dark:bg-teal-800 h-20 rounded-md"></div>
@@ -133,152 +140,140 @@ pub fn MessageList(
                         .map(|result| {
                             match result {
                                 Ok(message_list) => {
-                                    if message_list.is_empty()
-                                        && !current_thread_id.get().is_empty()
-                                    {
-                                        view! {
-                                            <div class="flex items-center justify-center h-32">
-                                                <p class="text-gray-500 dark:text-gray-400 text-sm">
-                                                    "No messages in this thread yet. Start a conversation!"
-                                                </p>
-                                            </div>
-                                        }
-                                            .into_any()
-                                    } else if message_list.is_empty()
-                                        && current_thread_id.get().is_empty()
-                                    {
-                                        view! {
-                                            <div class="flex items-center justify-center h-32">
-                                                <p class="text-gray-500 dark:text-gray-400 text-sm">
-                                                    "Select a thread or create a new one to start chatting!"
-                                                </p>
-                                            </div>
-                                        }
-                                            .into_any()
-                                    } else {
-                                        view! {
-                                            <For
-                                                each=move || message_list.clone()
-                                                key=|message| message.id
-                                                children=move |message| {
-                                                    let role = message.role.clone();
-                                                    let role_for_button = role.clone();
-                                                    let role_for_branch = role.clone();
-                                                    let role_for_info = role.clone();
-                                                    view! {
-                                                        <div class=format!(
-                                                            "message-wrapper flex w-full {}",
-                                                            if role == "assistant" {
-                                                                "justify-start"
-                                                            } else {
-                                                                "justify-end"
-                                                            },
-                                                        )>
-                                                            <div class="message-container flex flex-col">
-                                                                <button
-                                                                    class=format!(
-                                                                        "message-item border-0 p-2 transition duration-0 group {}",
-                                                                        if role_for_button == "assistant" {
-                                                                            "border-none bg-opacity-0 self-start bg-gray-300 dark:bg-teal-800 hover:bg-gray-400 dark:hover:bg-teal-900"
-                                                                        } else {
-                                                                            "border-gray-700 dark:border-teal-700 bg-gray-300 dark:bg-teal-800 self-end hover:bg-gray-400 dark:hover:bg-teal-900"
-                                                                        },
-                                                                    )
+                                    view! {
+                                        <For
+                                            each=move || {
+                                                message_list
+                                                    .clone()
+                                                    .into_iter()
+                                                    .filter(move |message: &MessageView| {
+                                                        if current_thread_id.get().is_empty() {
+                                                            true
+                                                        } else {
+                                                            message.thread_id == current_thread_id.get()
+                                                        }
+                                                    })
+                                            }
 
-                                                                    on:click=move |_| {
-                                                                        let document = window().unwrap().document().unwrap();
-                                                                        let elements = document
-                                                                            .query_selector_all(".info-for-nerds")
-                                                                            .unwrap();
-                                                                        for i in 0..elements.length() {
-                                                                            if let Some(node) = elements.item(i) {
-                                                                                if let Ok(element) = node.dyn_into::<Element>() {
-                                                                                    let _ = element.class_list().toggle("hidden");
-                                                                                }
+                                            key=|message| message.id
+                                            children=move |message| {
+                                                let role = message.role.clone();
+                                                let role_for_button = role.clone();
+                                                let role_for_branch = role.clone();
+                                                let role_for_info = role.clone();
+                                                view! {
+                                                    <div class=format!(
+                                                        "message-wrapper flex w-full {}",
+                                                        if role == "assistant" {
+                                                            "justify-start"
+                                                        } else {
+                                                            "justify-end"
+                                                        },
+                                                    )>
+                                                        <div class="message-container flex flex-col">
+                                                            <button
+                                                                class=format!(
+                                                                    "message-item border-0 p-2 transition duration-0 group {}",
+                                                                    if role_for_button == "assistant" {
+                                                                        "border-none bg-opacity-0 self-start bg-gray-300 dark:bg-teal-800 hover:bg-gray-400 dark:hover:bg-teal-900"
+                                                                    } else {
+                                                                        "border-gray-700 dark:border-teal-700 bg-gray-300 dark:bg-teal-800 self-end hover:bg-gray-400 dark:hover:bg-teal-900"
+                                                                    },
+                                                                )
+
+                                                                on:click=move |_| {
+                                                                    let document = window().unwrap().document().unwrap();
+                                                                    let elements = document
+                                                                        .query_selector_all(".info-for-nerds")
+                                                                        .unwrap();
+                                                                    for i in 0..elements.length() {
+                                                                        if let Some(node) = elements.item(i) {
+                                                                            if let Ok(element) = node.dyn_into::<Element>() {
+                                                                                let _ = element.class_list().toggle("hidden");
                                                                             }
                                                                         }
                                                                     }
-                                                                >
+                                                                }
+                                                            >
 
-                                                                    <div class="flex flex-row items-center space-x-2">
-                                                                        <img
-                                                                            src="openai_square_logo.webp"
-                                                                            class="w-6 h-6 rounded-full"
-                                                                        />
-                                                                        <img
-                                                                            src="anthropic_square_logo.webp"
-                                                                            class="w-6 h-6 rounded-full"
-                                                                        />
-                                                                        <p class="message-content ir text-base text-teal-600 dark:text-mint-400 hover:text-teal-800 dark:hover:text-mint-300">
-                                                                            {message.content.clone()}
+                                                                <div class="flex flex-row items-center space-x-2">
+                                                                    <img
+                                                                        src="openai_square_logo.webp"
+                                                                        class="w-6 h-6 rounded-full"
+                                                                    />
+                                                                    <img
+                                                                        src="anthropic_square_logo.webp"
+                                                                        class="w-6 h-6 rounded-full"
+                                                                    />
+                                                                    <p class="message-content ir text-base text-teal-600 dark:text-mint-400 hover:text-teal-800 dark:hover:text-mint-300">
+                                                                        {message.content.clone()}
+                                                                    </p>
+                                                                </div>
+                                                                <div class="info-for-nerds flex flex-row justify-between space-x-12 pt-8 hidden">
+                                                                    <div class="ai-info flex flex-col space-y-1">
+                                                                        <p class="message-thread_id ir text-xs text-teal-800 dark:text-mint-600 hover:text-teal-600 dark:hover:text-mint-500">
+                                                                            thread id: {message.thread_id.clone()}
+                                                                        </p>
+                                                                        <p class="message-id ir text-xs text-teal-800 dark:text-mint-600 hover:text-teal-600 dark:hover:text-mint-500">
+                                                                            message id: {message.id}
+                                                                        </p>
+                                                                        <p class="message-created_at ir text-xs text-teal-900 dark:text-mint-700 hover:text-teal-700 dark:hover:text-mint-600">
+                                                                            {message
+                                                                                .created_at
+                                                                                .map(|dt| dt.format("%b %d, %I:%M %p").to_string())
+                                                                                .unwrap_or_default()}
                                                                         </p>
                                                                     </div>
-                                                                    <div class="info-for-nerds flex flex-row justify-between space-x-12 pt-8 hidden">
-                                                                        <div class="ai-info flex flex-col space-y-1">
-                                                                            <p class="message-thread_id ir text-xs text-teal-800 dark:text-mint-600 hover:text-teal-600 dark:hover:text-mint-500">
-                                                                                thread id: {message.thread_id.clone()}
-                                                                            </p>
-                                                                            <p class="message-id ir text-xs text-teal-800 dark:text-mint-600 hover:text-teal-600 dark:hover:text-mint-500">
-                                                                                message id: {message.id}
-                                                                            </p>
-                                                                            <p class="message-created_at ir text-xs text-teal-900 dark:text-mint-700 hover:text-teal-700 dark:hover:text-mint-600">
-                                                                                {message
-                                                                                    .created_at
-                                                                                    .map(|dt| dt.format("%b %d, %I:%M %p").to_string())
-                                                                                    .unwrap_or_default()}
-                                                                            </p>
-                                                                        </div>
-                                                                        <div class="message-info flex flex-col space-y-1">
-                                                                            <p class="message-role ir text-xs text-teal-600 dark:text-mint-400 hover:text-teal-800 dark:hover:text-mint-300">
-                                                                                role: {role_for_info}
-                                                                            </p>
-                                                                            <p class="message-active_lab ir text-xs text-seafoam-600 dark:text-aqua-400 hover:text-seafoam-800 dark:hover:text-aqua-300">
-                                                                                lab: {message.active_lab.clone()}
-                                                                            </p>
-                                                                            <p class="message-active_model ib text-xs text-aqua-600 dark:text-aqua-700 hover:text-aqua-800 dark:hover:text-aqua-300">
-                                                                                model: {message.active_model.clone()}
-                                                                            </p>
-                                                                        </div>
+                                                                    <div class="message-info flex flex-col space-y-1">
+                                                                        <p class="message-role ir text-xs text-teal-600 dark:text-mint-400 hover:text-teal-800 dark:hover:text-mint-300">
+                                                                            role: {role_for_info}
+                                                                        </p>
+                                                                        <p class="message-active_lab ir text-xs text-seafoam-600 dark:text-aqua-400 hover:text-seafoam-800 dark:hover:text-aqua-300">
+                                                                            lab: {message.active_lab.clone()}
+                                                                        </p>
+                                                                        <p class="message-active_model ib text-xs text-aqua-600 dark:text-aqua-700 hover:text-aqua-800 dark:hover:text-aqua-300">
+                                                                            model: {message.active_model.clone()}
+                                                                        </p>
                                                                     </div>
-                                                                </button>
+                                                                </div>
+                                                            </button>
 
-                                                                {move || {
-                                                                    if role_for_branch == "user" {
-                                                                        view! {
-                                                                            <div class="branch-actions mt-2 flex justify-end gap-2">
-                                                                                <button
-                                                                                    class="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                                                                    disabled=move || create_branch_action.pending().get()
-                                                                                    on:click=move |_| {
-                                                                                        create_branch_action.dispatch((message.id,));
+                                                            {move || {
+                                                                if role_for_branch == "user" {
+                                                                    view! {
+                                                                        <div class="branch-actions mt-2 flex justify-end gap-2">
+                                                                            <button
+                                                                                class="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                                                disabled=move || create_branch_action.pending().get()
+                                                                                on:click=move |_| {
+                                                                                    create_branch_action.dispatch((message.id,));
+                                                                                }
+                                                                            >
+
+                                                                                {move || {
+                                                                                    if create_branch_action.pending().get() {
+                                                                                        "⏳ creating branch..."
+                                                                                    } else {
+                                                                                        "+ 🌿"
                                                                                     }
-                                                                                >
+                                                                                }}
 
-                                                                                    {move || {
-                                                                                        if create_branch_action.pending().get() {
-                                                                                            "⏳ creating branch..."
-                                                                                        } else {
-                                                                                            "+ 🌿"
-                                                                                        }
-                                                                                    }}
-
-                                                                                </button>
-                                                                            </div>
-                                                                        }
-                                                                            .into_any()
-                                                                    } else {
-                                                                        view! { <div></div> }.into_any()
+                                                                            </button>
+                                                                        </div>
                                                                     }
-                                                                }}
+                                                                        .into_any()
+                                                                } else {
+                                                                    view! { <div></div> }.into_any()
+                                                                }
+                                                            }}
 
-                                                            </div>
                                                         </div>
-                                                    }
+                                                    </div>
                                                 }
-                                            />
-                                        }
-                                            .into_any()
+                                            }
+                                        />
                                     }
+                                        .into_any()
                                 }
                                 Err(e) => {
                                     view! {
@@ -287,8 +282,11 @@ pub fn MessageList(
                                             <p class="text-sm">{e}</p>
                                             <button
                                                 class="mt-2 px-3 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
-                                                on:click=move |_| set_refetch_trigger.update(|n| *n += 1)
+                                                on:click=move |_| {
+                                                    set_internal_refetch_trigger.update(|n| *n += 1)
+                                                }
                                             >
+
                                                 "Retry"
                                             </button>
                                         </div>
@@ -300,7 +298,7 @@ pub fn MessageList(
                         .unwrap_or_else(|| view! { <div></div> }.into_any())
                 }}
 
-            </Suspense>
+            </Transition>
         </div>
     }
 }
