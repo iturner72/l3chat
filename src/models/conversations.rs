@@ -45,6 +45,93 @@ pub struct BranchInfo {
     pub created_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PendingMessage {
+    pub id: String,
+    pub thread_id: String,
+    pub content: String,
+    pub role: String,
+    pub active_model: String,
+    pub active_lab: String,
+    pub is_streaming: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub enum DisplayMessage {
+    Persisted(MessageView),
+    Pending(PendingMessage),
+}
+
+impl DisplayMessage {
+    pub fn id(&self) -> String {
+        match self {
+            DisplayMessage::Persisted(msg) => msg.id.to_string(),
+            DisplayMessage::Pending(msg) => msg.id.clone(),
+        }
+    }
+
+    pub fn thread_id(&self) -> &str {
+        match self {
+            DisplayMessage::Persisted(msg) => &msg.thread_id,
+            DisplayMessage::Pending(msg) => &msg.thread_id,
+        }
+    }
+
+    pub fn content(&self) -> &str {
+        match self {
+            DisplayMessage::Persisted(msg) => msg.content.as_deref().unwrap_or(""),
+            DisplayMessage::Pending(msg) => &msg.content,
+        }
+    }
+
+    pub fn role(&self) -> &str {
+        match self {
+            DisplayMessage::Persisted(msg) => &msg.role,
+            DisplayMessage::Pending(msg) => &msg.role,
+        }
+    }
+
+    pub fn active_model(&self) -> &str {
+        match self {
+            DisplayMessage::Persisted(msg) => &msg.active_model,
+            DisplayMessage::Pending(msg) => &msg.active_model,
+        }
+    }
+
+    pub fn active_lab(&self) -> &str {
+        match self {
+            DisplayMessage::Persisted(msg) => &msg.active_lab,
+            DisplayMessage::Pending(msg) => &msg.active_lab,
+        }
+    }
+
+    pub fn created_at(&self) -> Option<DateTime<Utc>> {
+        match self {
+            DisplayMessage::Persisted(msg) => msg.created_at,
+            DisplayMessage::Pending(msg) => Some(msg.created_at),
+        }
+    }
+
+    pub fn is_streaming(&self) -> bool {
+        match self {
+            DisplayMessage::Persisted(_) => false,
+            DisplayMessage::Pending(msg) => msg.is_streaming,
+        }
+    }
+
+    pub fn is_user(&self) -> bool {
+        self.role() == "user"
+    }
+
+    pub fn db_id(&self) -> Option<i32> {
+        match self {
+            DisplayMessage::Persisted(msg) => Some(msg.id),
+            DisplayMessage::Pending(_) => None,
+        }
+    }
+}
+
 cfg_if! { if #[cfg(feature = "ssr")] {
     use crate::schema::*;
     use chrono::NaiveDateTime;

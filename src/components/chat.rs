@@ -6,8 +6,9 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use web_sys::{EventSource, MessageEvent, ErrorEvent, HtmlElement};
+use chrono::Utc;
 
-use crate::{auth::get_current_user, models::conversations::NewMessageView};
+use crate::{auth::get_current_user, models::conversations::{NewMessageView, PendingMessage}};
 
 cfg_if! {
     if #[cfg(feature = "ssr")] {
@@ -260,11 +261,10 @@ cfg_if! {
 pub fn Chat(
     thread_id: ReadSignal<String>,
     #[prop(optional)] on_message_created: Option<Callback<()>>,
+    #[prop(optional)] pending_messages: Option<WriteSignal<Vec<PendingMessage>>>,
 ) -> impl IntoView {
     let (message, set_message) = signal(String::new());
-    let (response, set_response) = signal(String::new());
     let (is_sending, set_is_sending) = signal(false);
-    let (llm_content, set_llm_content) = signal(String::new());
     
     let (model, set_model) = signal("gpt-4o-mini".to_string());
     let (lab, set_lab) = signal("openai".to_string());
@@ -286,29 +286,26 @@ pub fn Chat(
         let current_thread_id = thread_id.get_untracked();
         let selected_model = model.get_untracked();
         let active_lab = lab.get_untracked();
-        let role = "user";
 
         spawn_local(async move {
             set_is_sending(true);
-            set_response.set("".to_string());
-            set_llm_content.set("".to_string());
-            let is_llm = false;
 
             let user_id = match get_current_user().await {
                 Ok(Some(user)) => Some(user.id),
                 _ => None,
             };
 
-            let new_message_view = NewMessageView {
+            // 1. Save user message to DB immediately
+            let user_message_view = NewMessageView {
                 thread_id: current_thread_id.clone(),
                 content: Some(message_value.clone()),
-                role: role.to_string(),
+                role: "user".to_string(),
                 active_model: selected_model.clone(),
                 active_lab: active_lab.clone(),
                 user_id,
             };
 
-            match create_message(new_message_view, is_llm).await {
+            match create_message(user_message_view, false).await {
                 Ok(_) => {
                     set_message.set(String::new());
                     
@@ -316,9 +313,30 @@ pub fn Chat(
                         callback.run(());
                     }
 
-                    let thread_id_value = thread_id().to_string();
-                    let active_model_value = model().to_string();
-                    let active_lab_value = lab().to_string();
+                    // 2. Create pending assistant message
+                    let pending_id = uuid::Uuid::new_v4().to_string();
+                    let pending_msg = PendingMessage {
+                        id: pending_id.clone(),
+                        thread_id: current_thread_id.clone(),
+                        content: String::new(),
+                        role: "assistant".to_string(),
+                        active_model: selected_model.clone(),
+                        active_lab: active_lab.clone(),
+                        is_streaming: true,
+                        created_at: Utc::now(),
+                    };
+                    
+                    // 3. Add to pending messages if available
+                    if let Some(set_pending) = pending_messages {
+                        set_pending.update(|msgs| msgs.push(pending_msg));
+                    }
+
+                    // 4. Set up SSE stream to collect content
+                    let mut accumulated_content = String::new();
+                    
+                    let thread_id_value = thread_id.get_untracked().to_string();
+                    let active_model_value = model.get_untracked().to_string();
+                    let active_lab_value = lab.get_untracked().to_string();
                     let event_source = Rc::new(EventSource::new(
                             &format!("/api/send_message_stream?thread_id={}&model={}&lab={}",
                             urlencoding::encode(&thread_id_value),
@@ -329,22 +347,24 @@ pub fn Chat(
         			let on_message = {
         				let event_source = Rc::clone(&event_source);
                         let on_message_created_clone = on_message_created;
+                        let pending_id_clone = pending_id.clone();
         				Closure::wrap(Box::new(move |event: MessageEvent| {
         					let data = event.data().as_string().unwrap();
         					if data == "[DONE]" {
-                                let llm_content_value = llm_content.get();
+                                // 5. Save final content to DB and remove from pending
+                                let final_content = accumulated_content.clone();
                                 let is_llm = true;
-                                let new_message_view = NewMessageView {
-                                    thread_id: thread_id().clone(),
-                                    content: Some(llm_content_value),
+                                let assistant_message_view = NewMessageView {
+                                    thread_id: thread_id.get_untracked().clone(),
+                                    content: Some(final_content),
                                     role: "assistant".to_string(),
-                                    active_model: model().clone(),
-                                    active_lab: lab().clone(),
+                                    active_model: model.get_untracked().clone(),
+                                    active_lab: lab.get_untracked().clone(),
                                     user_id,
                                 };
 
                                 spawn_local(async move {
-                                    if let Err(e) = create_message(new_message_view, is_llm).await {
+                                    if let Err(e) = create_message(assistant_message_view, is_llm).await {
                                         error!("Failed to create LLM message: {e:?}");
                                     } else {
                                         if let Some(callback) = on_message_created_clone {
@@ -353,18 +373,28 @@ pub fn Chat(
                                     }
                                 });
 
+                                // Remove from pending messages
+                                if let Some(set_pending) = pending_messages {
+                                    set_pending.update(|msgs| {
+                                        msgs.retain(|m| m.id != pending_id_clone)
+                                    });
+                                }
+
         						set_is_sending.set(false);
         						event_source.close();
         					} else {
+                                // 6. Stream tokens into pending message
                                 let processed_data = data.replace("\\n", "\n");
-        						set_response.update(|resp| {
-        							resp.push_str(&processed_data);
-        							resp.to_string();
-        						});
-                                set_llm_content.update(|content| {
-                                    content.push_str(&processed_data);
-                                    content.to_string();
-                                });
+                                accumulated_content.push_str(&processed_data);
+                                
+                                // Update pending message content
+                                if let Some(set_pending) = pending_messages {
+                                    set_pending.update(|msgs| {
+                                        if let Some(msg) = msgs.iter_mut().find(|m| m.id == pending_id_clone) {
+                                            msg.content = accumulated_content.clone();
+                                        }
+                                    });
+                                }
         					}
         				}) as Box<dyn FnMut(_)>)
         			};
@@ -386,7 +416,6 @@ pub fn Chat(
                             );
         					error!("{error_message}");
         					set_is_sending.set(false);
-        					set_response(error_message);
         					event_source.close();
         				}) as Box<dyn FnMut(_)>)
         			};
@@ -408,25 +437,6 @@ pub fn Chat(
 
     view! {
         <div class="flex flex-col space-y-4">
-            {move || {
-                if !response.get().is_empty() {
-                    view! {
-                        <div class="bg-white dark:bg-teal-700 rounded-lg p-4 border border-gray-300 dark:border-teal-600 max-h-32 overflow-y-auto">
-                            <div class="flex items-center mb-2">
-                                <div class="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></div>
-                                <span class="text-xs text-gray-600 dark:text-gray-300">AI responding...</span>
-                            </div>
-                            <p class="ir text-sm text-teal-700 dark:text-mint-300 whitespace-pre-wrap">
-                                {response.get()}
-                            </p>
-                        </div>
-                    }
-                        .into_any()
-                } else {
-                    view! { <div></div> }.into_any()
-                }
-            }}
-
             <div class="flex flex-col space-y-3">
                 <div class="flex justify-center">
                     <select

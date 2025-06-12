@@ -62,7 +62,7 @@ tower-http = { version = "0.5", features = ["fs", "trace"], optional = true }
 tracing = { version = "0.1", optional = true }
 url = { version = "2.5.4", optional = true }
 urlencoding = "2.1.3"
-uuid = { version = "1.11.0", features = ["v4"], optional = true }
+uuid = { version = "1.11.0", features = ["v4", "js"] }
 wasm-bindgen = "=0.2.100" 
 wasm-bindgen-futures = "0.4.46"
 web-sys = { version = "0.3.73", features = ["Storage", "Window", "Document", "CanvasRenderingContext2d", "TouchEvent", "TouchList", "DomRect", "DomTokenList", "Element", "NodeList", "Touch", "CustomEvent", "CustomEventInit"] }
@@ -100,7 +100,6 @@ ssr = [
     "dep:tower-http",
     "dep:tracing",
     "dep:url",
-    "dep:uuid",
     "leptos/ssr",
     "leptos_meta/ssr",
     "leptos_router/ssr",

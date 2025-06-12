@@ -4,6 +4,7 @@ use crate::components::chat::Chat;
 use crate::components::threadlist::{ThreadList, get_threads};
 use crate::components::messagelist::MessageList;
 use crate::components::toast::Toast;
+use crate::models::conversations::PendingMessage;
 
 #[component]
 pub fn WritersRoom() -> impl IntoView {
@@ -12,6 +13,8 @@ pub fn WritersRoom() -> impl IntoView {
     let (toast_visible, set_toast_visible) = signal(false);
     let (toast_message, set_toast_message) = signal(String::new());
     let (message_refetch_trigger, set_message_refetch_trigger) = signal(0);
+    
+    let (pending_messages, set_pending_messages) = signal(Vec::<PendingMessage>::new());
 
     let threads = Resource::new(
         || (),
@@ -28,6 +31,8 @@ pub fn WritersRoom() -> impl IntoView {
 
                     threads.refetch();
                     set_message_refetch_trigger.update(|n| *n += 1);
+                    
+                    set_pending_messages.update(|msgs| msgs.clear());
                     
                     set_timeout(
                         move || set_toast_visible(false),
@@ -48,6 +53,7 @@ pub fn WritersRoom() -> impl IntoView {
     let thread_switch_callback = Callback::new(move |new_id: String| {
         set_thread_id.set(new_id);
         set_message_refetch_trigger.update(|n| *n += 1);
+        set_pending_messages.update(|msgs| msgs.clear());
     });
 
     Effect::new(move |_| {
@@ -85,6 +91,7 @@ pub fn WritersRoom() -> impl IntoView {
                                 create_new_thread.dispatch(());
                             }
                         >
+
                             "+"
                         </button>
                     </div>
@@ -108,7 +115,7 @@ pub fn WritersRoom() -> impl IntoView {
                 }>
                     <div class="p-4 h-full overflow-y-auto w-80">
                         <Suspense fallback=move || {
-                            view! { 
+                            view! {
                                 <div class="text-gray-600 dark:text-gray-300">
                                     <p>"loading threads..."</p>
                                 </div>
@@ -139,23 +146,26 @@ pub fn WritersRoom() -> impl IntoView {
                                         }
                                     })
                             }}
+
                         </Suspense>
                     </div>
                 </div>
-            
+
                 <div class="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
                     <div class="flex-1 overflow-hidden p-4 min-w-0">
-                        <MessageList 
-                            current_thread_id=thread_id 
+                        <MessageList
+                            current_thread_id=thread_id
                             set_current_thread_id=set_thread_id
                             refetch_trigger=message_refetch_trigger
+                            pending_messages=pending_messages
                         />
                     </div>
-            
+
                     <div class="flex-shrink-0 border-t border-gray-400 dark:border-teal-700 bg-gray-100 dark:bg-teal-800 p-4">
-                        <Chat 
+                        <Chat
                             thread_id=thread_id
                             on_message_created=on_message_created
+                            pending_messages=set_pending_messages
                         />
                     </div>
                 </div>
