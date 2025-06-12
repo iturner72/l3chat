@@ -2,6 +2,7 @@ use leptos::prelude::*;
 
 use crate::models::conversations::MessageView;
 use crate::components::threadlist::{create_branch, get_thread_branches};
+use crate::components::markdown::MarkdownRenderer;
 
 #[component]
 pub fn MessageList(
@@ -63,7 +64,7 @@ pub fn MessageList(
     });
 
     view! {
-        <div class="h-full flex flex-col">
+        <div class="h-full flex flex-col w-full overflow-hidden">
             <div class="flex-shrink-0 mb-4">
                 <Transition fallback=move || {
                     view! {
@@ -120,7 +121,7 @@ pub fn MessageList(
                 </Transition>
             </div>
 
-            <div class="flex-1 overflow-y-auto pr-2">
+            <div class="flex-1 overflow-y-auto overflow-x-hidden pr-2 min-w-0 w-full">
                 <Transition fallback=move || {
                     view! {
                         <div class="space-y-4">
@@ -148,7 +149,7 @@ pub fn MessageList(
                                                 .into_any()
                                         } else {
                                             view! {
-                                                <div class="space-y-4">
+                                                <div class="space-y-4 w-full overflow-hidden">
                                                     <For
                                                         each=move || {
                                                             message_list
@@ -170,7 +171,7 @@ pub fn MessageList(
                                                             
                                                             view! {
                                                                 <div class=format!(
-                                                                    "flex w-full {}",
+                                                                    "flex w-full min-w-0 {}",
                                                                     if is_user {
                                                                         "justify-end"
                                                                     } else {
@@ -178,7 +179,7 @@ pub fn MessageList(
                                                                     },
                                                                 )>
                                                                     <div class=format!(
-                                                                        "max-w-[80%] rounded-lg p-4 shadow-sm {}",
+                                                                        "max-w-[80%] min-w-0 rounded-lg p-4 shadow-sm overflow-hidden {}",
                                                                         if is_user {
                                                                             "bg-seafoam-500 text-white"
                                                                         } else {
@@ -246,17 +247,25 @@ pub fn MessageList(
                                                                             </span>
                                                                         </div>
 
-                                                                        <div class="prose prose-sm max-w-none">
-                                                                            <p class=format!(
-                                                                                "whitespace-pre-wrap text-sm leading-relaxed {}",
-                                                                                if is_user {
-                                                                                    "text-white"
-                                                                                } else {
-                                                                                    "text-gray-800 dark:text-gray-200"
-                                                                                },
-                                                                            )>
-                                                                                {message.content.clone().unwrap_or_default()}
-                                                                            </p>
+                                                                        <div class="prose prose-sm w-full max-w-full overflow-hidden">
+                                                                            {if is_user {
+                                                                                view! {
+                                                                                    <p class="whitespace-pre-wrap text-sm leading-relaxed text-white break-words w-full">
+                                                                                        {message.content.clone().unwrap_or_default()}
+                                                                                    </p>
+                                                                                }
+                                                                                    .into_any()
+                                                                            } else {
+                                                                                view! {
+                                                                                    <div class="text-sm leading-relaxed text-left w-full max-w-full overflow-hidden">
+                                                                                        <MarkdownRenderer 
+                                                                                            content=message.content.clone().unwrap_or_default()
+                                                                                            class="text-left w-full max-w-full"
+                                                                                        />
+                                                                                    </div>
+                                                                                }
+                                                                                    .into_any()
+                                                                            }}
                                                                         </div>
 
                                                                         {if is_user {

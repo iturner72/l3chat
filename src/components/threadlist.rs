@@ -481,8 +481,8 @@ pub async fn search_threads(query: String) -> Result<Vec<ThreadView>, ServerFnEr
         .left_join(messages::table.on(messages::thread_id.eq(threads::id)))
         .filter(threads::user_id.eq(other_user_id))
         .filter(
-            threads::id.like(format!("%{query}%"))
-                .or(messages::content.like(format!("%{query}%")))
+            threads::id.ilike(format!("%{query}%"))
+                .or(messages::content.ilike(format!("%{query}%")))
         )
         .select(threads::all_columns)
         .distinct()

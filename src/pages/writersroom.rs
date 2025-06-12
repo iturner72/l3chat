@@ -97,16 +97,16 @@ pub fn WritersRoom() -> impl IntoView {
                 </div>
             </div>
 
-            <div class="flex-1 flex flex-row min-h-0">
+            <div class="flex-1 flex flex-row min-h-0 overflow-hidden">
                 <div class=move || {
-                    let base_class = "transition-all duration-300 ease-in-out overflow-hidden border-r border-gray-400 dark:border-teal-700 bg-gray-200 dark:bg-teal-800";
+                    let base_class = "transition-all duration-300 ease-in-out overflow-hidden border-r border-gray-400 dark:border-teal-700 bg-gray-200 dark:bg-teal-800 flex-shrink-0";
                     if show_threads.get() {
                         format!("{base_class} w-80 opacity-100")
                     } else {
                         format!("{base_class} w-0 opacity-0")
                     }
                 }>
-                    <div class="p-4 h-full overflow-y-auto">
+                    <div class="p-4 h-full overflow-y-auto w-80">
                         <Suspense fallback=move || {
                             view! { 
                                 <div class="text-gray-600 dark:text-gray-300">
@@ -142,16 +142,16 @@ pub fn WritersRoom() -> impl IntoView {
                         </Suspense>
                     </div>
                 </div>
-
-                <div class="flex-1 flex flex-col min-h-0">
-                    <div class="flex-1 overflow-hidden p-4">
+            
+                <div class="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
+                    <div class="flex-1 overflow-hidden p-4 min-w-0">
                         <MessageList 
                             current_thread_id=thread_id 
                             set_current_thread_id=set_thread_id
                             refetch_trigger=message_refetch_trigger
                         />
                     </div>
-
+            
                     <div class="flex-shrink-0 border-t border-gray-400 dark:border-teal-700 bg-gray-100 dark:bg-teal-800 p-4">
                         <Chat 
                             thread_id=thread_id
