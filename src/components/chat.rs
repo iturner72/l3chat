@@ -126,7 +126,6 @@ cfg_if! {
                 info!("Stream closed");
                 Ok(())
             }
-
         }
 
         impl OpenAIService {
@@ -282,7 +281,7 @@ pub fn Chat(
         set_lab(new_lab.to_string());
     };
 
-    let send_message_action = move |_| {
+    let send_message = move || {
         let message_value = message.get();
         let current_thread_id = thread_id.get_untracked();
         let selected_model = model.get_untracked();
@@ -403,30 +402,64 @@ pub fn Chat(
         });
     };
 
+    let send_message_action = move |_: web_sys::MouseEvent| {
+        send_message();
+    };
+
     view! {
-        <div class="flex flex-col items-center justify-between pb-2 md:pb-4">
-            <div class="w-10/12 md:w-7/12 h-[calc(0vh-20px)] overflow-y-auto flex flex-col-reverse pb-0 md:pb-12">
-                <Suspense fallback=|| {
+        <div class="flex flex-col space-y-4">
+            {move || {
+                if !response.get().is_empty() {
                     view! {
-                        <p class="ir text-base text-seafoam-500 dark:text-aqua-400">"loading..."</p>
-                    }
-                }>
-                    {move || {
-                        view! {
-                            <p class="ir text-teal-700 dark:text-mint-300 whitespace-pre-wrap">
+                        <div class="bg-white dark:bg-teal-700 rounded-lg p-4 border border-gray-300 dark:border-teal-600 max-h-32 overflow-y-auto">
+                            <div class="flex items-center mb-2">
+                                <div class="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></div>
+                                <span class="text-xs text-gray-600 dark:text-gray-300">AI responding...</span>
+                            </div>
+                            <p class="ir text-sm text-teal-700 dark:text-mint-300 whitespace-pre-wrap">
                                 {response.get()}
                             </p>
-                        }
-                    }}
+                        </div>
+                    }
+                        .into_any()
+                } else {
+                    view! { <div></div> }.into_any()
+                }
+            }}
 
-                </Suspense>
-            </div>
-            <div class="flex flex-col items-start justify-center space-y-2 w-6/12 md:w-7/12">
-                <div class="flex flex-row justify-center space-x-4 w-full">
+            <div class="flex flex-col space-y-3">
+                <div class="flex justify-center">
+                    <select
+                        class="ib text-xs md:text-sm px-3 py-2 rounded-md
+                        text-gray-900 dark:text-gray-100 
+                        bg-white dark:bg-teal-700 
+                        border border-gray-400 dark:border-teal-600
+                        hover:border-gray-600 dark:hover:border-teal-400
+                        focus:border-seafoam-500 dark:focus:border-aqua-400 focus:outline-none
+                        transition duration-200 ease-in-out"
+                        on:change=handle_model_change
+                        prop:value=move || model.get()
+                    >
+                        <option value="claude-3-haiku-20240307">"claude-3-haiku"</option>
+                        <option value="claude-3-sonnet-20240229">"claude-3-sonnet"</option>
+                        <option value="claude-3-opus-20240229">"claude-3-opus"</option>
+                        <option value="claude-3-5-sonnet-20240620">"claude-3-5-sonnet"</option>
+                        <option value="gpt-4o-mini">"gpt-4o-mini"</option>
+                        <option value="gpt-4o">"gpt-4o"</option>
+                        <option value="gpt-4-turbo">"gpt-4-turbo"</option>
+                    </select>
+                </div>
+
+                <div class="flex space-x-3">
                     <textarea
-                        class="ir text-sm text-gray-800 dark:text-gray-200 bg-gray-100 dark:bg-teal-800 w-full h-8 md:h-12 p-2 text-wrap
-                        border-0 border-teal-600 dark:border-seafoam-600 focus:border-seafoam-500 dark:focus:border-aqua-500 focus:outline-none
-                        transition duration-100 ease-in-out resize-none"
+                        class="ir text-sm flex-1 p-3 rounded-lg resize-none min-h-[2.5rem] max-h-32
+                        text-gray-800 dark:text-gray-200 
+                        bg-white dark:bg-teal-700 
+                        border border-gray-400 dark:border-teal-600
+                        focus:border-seafoam-500 dark:focus:border-aqua-400 focus:outline-none focus:ring-2 focus:ring-seafoam-500/20
+                        placeholder-gray-500 dark:placeholder-gray-400
+                        transition duration-200 ease-in-out"
+                        placeholder="Type your message..."
                         prop:value=message
                         on:input=move |event| {
                             set_message(event_target_value(&event));
@@ -443,37 +476,37 @@ pub fn Chat(
                                 )
                                 .unwrap();
                         }
+                        on:keydown=move |event| {
+                            if event.key() == "Enter" && !event.shift_key() {
+                                event.prevent_default();
+                                if !message.get().trim().is_empty() && !is_sending.get() {
+                                    send_message();
+                                }
+                            }
+                        }
                     >
                     </textarea>
                     <button
-                        class="ib text-white bg-seafoam-600 hover:bg-seafoam-700 dark:bg-teal-600 dark:hover:bg-teal-700
-                        text-xs md:text-lg w-1/6 p-2 transition duration-100 ease-in-out
-                        disabled:bg-gray-400 dark:disabled:bg-teal-900 disabled:text-gray-600 dark:disabled:text-teal-400 disabled:cursor-not-allowed"
+                        class="ib px-6 py-3 rounded-lg font-medium
+                        text-white transition duration-200 ease-in-out
+                        disabled:cursor-not-allowed disabled:opacity-50
+                        focus:outline-none focus:ring-2 focus:ring-offset-2"
+                        class:bg-seafoam-600=move || !is_sending.get()
+                        class:hover:bg-seafoam-700=move || !is_sending.get()
+                        class:focus:ring-seafoam-500=move || !is_sending.get()
+                        class:dark:bg-teal-600=move || !is_sending.get()
+                        class:dark:hover:bg-teal-700=move || !is_sending.get()
+                        class:bg-gray-400=move || is_sending.get()
+                        class:dark:bg-gray-600=move || is_sending.get()
                         on:click=send_message_action
-                        disabled=move || is_sending.get()
+                        disabled=move || is_sending.get() || message.get().trim().is_empty()
                     >
                         {move || if is_sending.get() { "yapping..." } else { "yap" }}
                     </button>
                 </div>
 
-                <div class="flex justify-center">
-                    <select
-                        class="ib text-xs md:text-sm 
-                        text-gray-900 dark:text-gray-100 hover:text-gray-800 dark:hover:text-gray-200 p-2 border-0 
-                        bg-gray-300 dark:bg-teal-700 hover:bg-gray-400 dark:hover:bg-teal-600 
-                        border-gray-700 dark:border-gray-600 hover:border-gray-900 dark:hover:border-gray-400
-                        transition duration-100 ease-in-out"
-                        on:change=handle_model_change
-                        prop:value=move || model.get()
-                    >
-                        <option value="claude-3-haiku-20240307">"claude-3-haiku"</option>
-                        <option value="claude-3-sonnet-20240229">"claude-3-sonnet"</option>
-                        <option value="claude-3-opus-20240229">"claude-3-opus"</option>
-                        <option value="claude-3-5-sonnet-20240620">"claude-3-5-sonnet"</option>
-                        <option value="gpt-4o-mini">"gpt-4o-mini"</option>
-                        <option value="gpt-4o">"gpt-4o"</option>
-                        <option value="gpt-4-turbo">"gpt-4-turbo"</option>
-                    </select>
+                <div class="text-xs text-gray-500 dark:text-gray-400 text-center">
+                    "Press Enter to send • Shift+Enter for new line"
                 </div>
             </div>
         </div>

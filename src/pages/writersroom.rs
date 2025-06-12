@@ -63,79 +63,96 @@ pub fn WritersRoom() -> impl IntoView {
     });
 
     view! {
-        <div class="w-full flex flex-col bg-gray-300 dark:bg-teal-900 justify-start pt-2 pl-2 pr-2 h-screen">
-            <div class="flex flex-row items-center justify-between">
-                <div class="flex flex-row items-center justify-center space-x-2">
-                    <button
-                        class="self-start ib text-xs md:text-sm text-gray-900 dark:text-gray-100 hover:text-gray-800 dark:hover:text-gray-200 p-2 border-1 bg-gray-300 dark:bg-teal-700 hover:bg-gray-400 dark:hover:bg-teal-600 border-gray-700 dark:border-gray-600 hover:border-gray-900 dark:hover:border-gray-400"
-                        on:click=move |_| set_show_threads.update(|v| *v = !*v)
+        <div class="w-full h-screen bg-gray-300 dark:bg-teal-900 flex flex-col">
+            <div class="flex-shrink-0 p-2 border-b border-gray-400 dark:border-teal-700">
+                <div class="flex flex-row items-center justify-between">
+                    <div class="flex flex-row items-center justify-center space-x-2">
+                        <button
+                            class="ib text-xs md:text-sm text-gray-900 dark:text-gray-100 hover:text-gray-800 dark:hover:text-gray-200 
+                            px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
+                            border border-gray-600 dark:border-gray-500 hover:border-gray-800 dark:hover:border-gray-400 
+                            rounded transition-colors duration-200"
+                            on:click=move |_| set_show_threads.update(|v| *v = !*v)
+                        >
+                            {move || if show_threads.get() { "←" } else { "→" }}
+                        </button>
+                        <button
+                            class="ib text-xs md:text-sm text-teal-700 dark:text-teal-100 hover:text-teal-600 dark:hover:text-teal-200 
+                            px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
+                            border border-gray-600 dark:border-gray-500 hover:border-gray-800 dark:hover:border-gray-400 
+                            rounded transition-colors duration-200"
+                            on:click=move |_| {
+                                create_new_thread.dispatch(());
+                            }
+                        >
+                            "+"
+                        </button>
+                    </div>
+                    <a
+                        href="/"
+                        class="text-xl text-seafoam-600 dark:text-mint-400 ib font-bold hover:text-seafoam-700 dark:hover:text-mint-300"
                     >
-                        {move || if show_threads.get() { "←" } else { "→" }}
-                    </button>
-                    <button
-                        class="ib text-xs md:text-sm text-teal-700 dark:text-teal-100 hover:text-teal-600 dark:hover:text-teal-200 p-2 pl-3 pr-3 border-1 bg-gray-300 dark:bg-teal-700 hover:bg-gray-400 dark:hover:bg-teal-600 border-gray-700 dark:border-gray-600 hover:border-gray-900 dark:hover:border-gray-400"
-                        on:click=move |_| {
-                            create_new_thread.dispatch(());
-                        }
-                    >
-
-                        "+"
-
-                    </button>
+                        "← home"
+                    </a>
                 </div>
             </div>
-            <div class="flex flex-row items-start justify-between">
+
+            <div class="flex-1 flex flex-row min-h-0">
                 <div class=move || {
-                    let base_class = "transition-all duration-300 ease-in-out overflow-hidden";
+                    let base_class = "transition-all duration-300 ease-in-out overflow-hidden border-r border-gray-400 dark:border-teal-700 bg-gray-200 dark:bg-teal-800";
                     if show_threads.get() {
-                        format!("{base_class} max-w-xs w-full opacity-100")
+                        format!("{base_class} w-80 opacity-100")
                     } else {
-                        format!("{base_class} max-w-0 w-0 opacity-0")
+                        format!("{base_class} w-0 opacity-0")
                     }
                 }>
-                    <Suspense fallback=move || {
-                        view! { <p>"loading threads..."</p> }
-                    }>
-                        {move || {
-                            threads
-                                .get()
-                                .map(|thread_list| {
-                                    match thread_list {
-                                        Ok(_threads) => {
-                                            view! {
-                                                <div>
+                    <div class="p-4 h-full overflow-y-auto">
+                        <Suspense fallback=move || {
+                            view! { 
+                                <div class="text-gray-600 dark:text-gray-300">
+                                    <p>"loading threads..."</p>
+                                </div>
+                            }
+                        }>
+                            {move || {
+                                threads
+                                    .get()
+                                    .map(|thread_list| {
+                                        match thread_list {
+                                            Ok(_threads) => {
+                                                view! {
                                                     <ThreadList
                                                         current_thread_id=thread_id
                                                         set_current_thread_id=thread_switch_callback
                                                     />
-                                                </div>
+                                                }
+                                                    .into_any()
                                             }
-                                                .into_any()
-                                        }
-                                        Err(e) => {
-                                            view! {
-                                                <div>{"error loading threads: "} {e.to_string()}</div>
+                                            Err(e) => {
+                                                view! {
+                                                    <div class="text-red-600 dark:text-red-400">
+                                                        {"error loading threads: "} {e.to_string()}
+                                                    </div>
+                                                }
+                                                    .into_any()
                                             }
-                                                .into_any()
                                         }
-                                    }
-                                })
-                        }}
-
-                    </Suspense>
+                                    })
+                            }}
+                        </Suspense>
+                    </div>
                 </div>
-                <div class="w-full flex flex-col content-end justify-between h-[calc(80vh-10px)]">
-                    <MessageList 
-                        current_thread_id=thread_id 
-                        set_current_thread_id=set_thread_id
-                        refetch_trigger=message_refetch_trigger
-                    />
-                    <div class="relative text-gray-900 dark:text-gray-100">
-                        <Toast
-                            message=toast_message
-                            visible=toast_visible
-                            on_close=move || set_toast_visible(false)
+
+                <div class="flex-1 flex flex-col min-h-0">
+                    <div class="flex-1 overflow-hidden p-4">
+                        <MessageList 
+                            current_thread_id=thread_id 
+                            set_current_thread_id=set_thread_id
+                            refetch_trigger=message_refetch_trigger
                         />
+                    </div>
+
+                    <div class="flex-shrink-0 border-t border-gray-400 dark:border-teal-700 bg-gray-100 dark:bg-teal-800 p-4">
                         <Chat 
                             thread_id=thread_id
                             on_message_created=on_message_created
@@ -143,6 +160,12 @@ pub fn WritersRoom() -> impl IntoView {
                     </div>
                 </div>
             </div>
+
+            <Toast
+                message=toast_message
+                visible=toast_visible
+                on_close=move || set_toast_visible(false)
+            />
         </div>
     }
 }

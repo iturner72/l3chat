@@ -7,7 +7,6 @@ use crate::models::conversations::ThreadView;
 #[component]
 pub fn ThreadList(
     current_thread_id: ReadSignal<String>,
-    // Change to accept a callback instead of WriteSignal directly
     #[prop(into)] set_current_thread_id: Callback<String>,
 ) -> impl IntoView {
     // Use Resource instead of spawn_local for SSR compatibility
@@ -126,7 +125,7 @@ pub fn ThreadList(
                     on:input=handle_search
                     class="grep-box w-full pr-10 p-2 mb-2 bg-gray-100 dark:bg-teal-800 text-teal-600 dark:text-mint-400
                     border-0 border-gray-300 dark:border-teal-600 focus:border-teal-500 dark:focus:border-mint-300
-                    focus:outline-none transition duration-300 ease-in-out"
+                    focus:outline-none transition duration-0 ease-in-out"
                 />
                 <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -349,7 +348,7 @@ fn ThreadTreeNode(
                         view! {
                             <button
                                 class=format!(
-                                    "thread-item w-full p-2 border-0 {} transition duration-300 ease-in-out group text-sm relative",
+                                    "thread-item w-full p-2 border-0 {} rounded-md transition duration-0 ease-in-out group text-sm relative",
                                     button_class,
                                 )
 
@@ -362,18 +361,9 @@ fn ThreadTreeNode(
                                 <div class="flex items-center">
                                     <span class="mr-2">{icon}</span>
                                     <p class=format!(
-                                        "thread-name ib text-sm {} transition duration-300 ease-in-out",
+                                        "thread-name ib text-sm {} transition duration-0 ease-in-out",
                                         text_class,
                                     )>{get_display_name(&thread_for_display)}</p>
-                                </div>
-                                <div class="stats-for-nerds hidden group-hover:flex flex-col items-start mt-2">
-                                    <p class="thread-created_at ir text-xs text-teal-300 dark:text-mint-200 group-hover:text-teal-100 dark:group-hover:text-mint-100">
-                                        created:
-                                        {thread_for_display
-                                            .created_at
-                                            .map(|dt| dt.format("%b %d, %I:%M %p").to_string())
-                                            .unwrap_or_default()}
-                                    </p>
                                 </div>
                             </button>
                         }
@@ -381,7 +371,7 @@ fn ThreadTreeNode(
 
                     <button
                         class="delete-button ib text-teal-600 dark:text-mint-400 hover:text-teal-400 dark:hover:text-mint-300 text-sm ml-2 p-2 
-                        bg-gray-400 dark:bg-teal-900 hover:bg-gray-500 dark:hover:bg-teal-800 rounded transition duration-300 ease-in-out relative z-10"
+                        bg-gray-400 dark:bg-teal-900 hover:bg-gray-500 dark:hover:bg-teal-800 rounded transition duration-0 ease-in-out relative z-10"
                         on:click=move |_| {
                             delete_action.dispatch(thread_id_for_delete.clone());
                         }
