@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_icons::Icon;
 
 use crate::components::chat::Chat;
 use crate::components::threadlist::{ThreadList, get_threads};
@@ -77,22 +78,25 @@ pub fn WritersRoom() -> impl IntoView {
                             class="ib text-xs md:text-sm text-gray-900 dark:text-gray-100 hover:text-gray-800 dark:hover:text-gray-200 
                             px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
                             border border-gray-600 dark:border-gray-500 hover:border-gray-800 dark:hover:border-gray-400 
-                            rounded transition-colors duration-200"
+                            rounded transition-colors duration-200 flex items-center justify-center"
                             on:click=move |_| set_show_threads.update(|v| *v = !*v)
                         >
-                            {move || if show_threads.get() { "←" } else { "→" }}
+                            {move || if show_threads.get() { 
+                                view! { <Icon icon=icondata::TbLayoutSidebarRightExpandFilled width="16" height="16" /> } 
+                            } else { 
+                                view! { <Icon icon=icondata::TbLayoutSidebarLeftExpandFilled width="16" height="16" /> } 
+                            }}
                         </button>
                         <button
                             class="ib text-xs md:text-sm text-teal-700 dark:text-teal-100 hover:text-teal-600 dark:hover:text-teal-200 
                             px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
                             border border-gray-600 dark:border-gray-500 hover:border-gray-800 dark:hover:border-gray-400 
-                            rounded transition-colors duration-200"
+                            rounded transition-colors duration-200 flex items-center justify-center"
                             on:click=move |_| {
                                 create_new_thread.dispatch(());
                             }
                         >
-
-                            "+"
+                            <Icon icon=icondata::FiPlus width="16" height="16" />
                         </button>
                     </div>
                     <a

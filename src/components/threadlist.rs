@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_icons::Icon;
 use log::error;
 use web_sys::Event;
 
@@ -258,31 +259,39 @@ fn ThreadTreeNode(
         let is_branch = thread_for_styles.parent_thread_id.is_some();
         
         if is_branch {
-            // This is a branch - always use branch emoji
+            // This is a branch - use branch icon
             if active {
                 (
-                    "🌿",
+                    view! {
+                        <div class="rotate-180-mirror">
+                            <Icon icon=icondata::MdiSourceBranch width="16" height="16" />
+                        </div>
+                    }.into_any(),
                     "border-seafoam-500 bg-seafoam-600 dark:bg-seafoam-700",
                     "text-white group-hover:text-white",
                 )
             } else {
                 (
-                    "🌿",
+                    view! {
+                        <div class="rotate-180-mirror">
+                            <Icon icon=icondata::MdiSourceBranch width="16" height="16" />
+                        </div>
+                    }.into_any(),
                     "border-gray-600 bg-gray-200 dark:bg-teal-700 hover:border-seafoam-600 hover:bg-gray-300 dark:hover:bg-teal-600",
                     "text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-white",
                 )
             }
         } else {
-            // This is a main thread - use thread emoji
+            // This is a main thread - no icon
             if active {
                 (
-                    "🧵",
+                    view! { <span></span> }.into_any(),
                     "border-teal-500 bg-teal-600 dark:bg-teal-700",
                     "text-white group-hover:text-white",
                 )
             } else {
                 (
-                    "🧵",
+                    view! { <span></span> }.into_any(),
                     "border-teal-700 bg-gray-300 dark:bg-teal-800 hover:border-teal-800 hover:bg-gray-400 dark:hover:bg-gray-700",
                     "text-gray-700 group-hover:text-white dark:text-gray-100 dark:group-hover:text-white",
                 )
@@ -292,7 +301,7 @@ fn ThreadTreeNode(
 
     let get_display_name = move |thread: &ThreadView| {
         if let Some(branch_name) = &thread.branch_name {
-            // For branches, just show the branch emoji and number
+            // For branches, just show the branch name
             format!("branch {}", branch_name)
         } else if thread.parent_thread_id.is_some() {
             // Fallback for branches without explicit names
@@ -426,6 +435,7 @@ fn ThreadTreeNode(
         </div>
     }.into_any()
 }
+
 
 #[server(SearchThreads, "/api")]
 pub async fn search_threads(query: String) -> Result<Vec<ThreadView>, ServerFnError> {

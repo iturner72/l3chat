@@ -6,6 +6,11 @@ html {
     background-color: rgb(1, 9, 9)
 }
 
+.rotate-180-mirror {
+    transform: rotate(180deg) scaleX(-1);
+    display: inline-block;
+}
+
 .translate_y_neg_4 {
     transform: translateY(-1rem);
 }

@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_icons::Icon;
 use chrono::Utc;
 
 use crate::models::conversations::{MessageView, DisplayMessage, PendingMessage};
@@ -132,13 +133,13 @@ pub fn MessageList(
                                                                         "bg-white dark:bg-teal-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-teal-500 border border-gray-300 dark:border-teal-500"
                                                                     },
                                                                 )
-
                                                                 on:click=move |_| {
                                                                     set_current_thread_id.set(branch_id.clone())
                                                                 }
                                                             >
-
-                                                                "🌿 "
+                                                                <div class="rotate-180-mirror">
+                                                                    <Icon icon=icondata::MdiSourceBranch width="16" height="16" />
+                                                                </div>
                                                                 {branch.branch_name.unwrap_or_else(|| "branch".to_string())}
                                                             </button>
                                                         }
@@ -159,7 +160,7 @@ pub fn MessageList(
             </div>
 
             <div class="flex-1 overflow-y-auto overflow-x-hidden pr-2 min-w-0 w-full">
-                <Suspense fallback=move || {
+                <Transition fallback=move || {
                     view! {
                         <div class="space-y-4 w-full overflow-hidden">
                             <div class="animate-pulse bg-gray-200 dark:bg-teal-800 h-20 rounded-lg"></div>
@@ -238,15 +239,18 @@ pub fn MessageList(
                                                                                     create_branch_action.dispatch((db_id,));
                                                                                 }
                                                                             >
-
-                                                                                {move || {
-                                                                                    if create_branch_action.pending().get() {
-                                                                                        "⏳ creating branch..."
-                                                                                    } else {
-                                                                                        "🌿 branch from here"
-                                                                                    }
-                                                                                }}
-
+                                                                                <div class="inline-flex items-center gap-1">
+                                                                                    <div class="rotate-180-mirror">
+                                                                                        <Icon icon=icondata::MdiSourceBranchPlus width="16" height="16" />
+                                                                                    </div>
+                                                                                    {move || {
+                                                                                        if create_branch_action.pending().get() {
+                                                                                            "creating branch..."
+                                                                                        } else {
+                                                                                            ""
+                                                                                        }
+                                                                                    }}
+                                                                                </div>
                                                                             </button>
                                                                         </div>
                                                                     }.into_any()
@@ -277,7 +281,7 @@ pub fn MessageList(
                         }
                     }}
 
-                </Suspense>
+                </Transition>
             </div>
         </div>
     }
