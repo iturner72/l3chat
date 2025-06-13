@@ -1,10 +1,28 @@
 use leptos::prelude::*;
+use leptos_fetch::QueryClient;
 use leptos_icons::Icon;
 use chrono::Utc;
 
-use crate::models::conversations::{MessageView, DisplayMessage, PendingMessage};
-use crate::components::threadlist::{create_branch, get_thread_branches};
+use crate::models::conversations::{MessageView, DisplayMessage, PendingMessage, BranchInfo};
 use crate::components::markdown::MarkdownRenderer;
+
+// Simple query function for getting messages
+async fn get_messages_query(thread_id: String) -> Result<Vec<MessageView>, String> {
+    if thread_id.is_empty() {
+        Ok(Vec::new())
+    } else {
+        get_messages_for_thread(thread_id).await.map_err(|e| e.to_string())
+    }
+}
+
+// Simple query function for getting thread branches
+async fn get_branches_query(thread_id: String) -> Result<Vec<BranchInfo>, String> {
+    if thread_id.is_empty() {
+        Ok(Vec::new())
+    } else {
+        get_thread_branches(thread_id).await.map_err(|e| e.to_string())
+    }
+}
 
 #[component]
 pub fn MessageList(
@@ -13,41 +31,40 @@ pub fn MessageList(
     #[prop(optional)] refetch_trigger: Option<ReadSignal<i32>>,
     #[prop(optional)] pending_messages: Option<ReadSignal<Vec<PendingMessage>>>,
 ) -> impl IntoView {
-    // Create a signal to track refetch triggers
-    let (internal_refetch_trigger, set_internal_refetch_trigger) = signal(0);
-
-    // Combine external and internal triggers
-    let combined_trigger = move || {
-        let internal = internal_refetch_trigger.get();
-        let external = refetch_trigger.map(|t| t.get()).unwrap_or(0);
-        (current_thread_id.get(), internal, external)
+    let client: QueryClient = expect_context();
+    
+    // Create a reactive key that depends on both thread_id and refetch trigger
+    let _query_key = move || {
+        let thread = current_thread_id.get();
+        let trigger = refetch_trigger.map(|t| t.get()).unwrap_or(0);
+        (thread, trigger)
     };
 
-    let messages_resource = Resource::new(
-        combined_trigger,
-        |(thread_id, _, _)| async move { 
-            if thread_id.is_empty() {
-                Ok(Vec::new())
-            } else {
-                get_messages_for_thread(thread_id).await.map_err(|e| format!("Failed to load thread: {}", e))
-            }
-        }
+    // Use leptos-fetch resource for messages
+    let messages_resource = client.resource(
+        get_messages_query, 
+        move || current_thread_id.get()
     );
 
-    let branches_resource = Resource::new(
-        combined_trigger,
-        |(thread_id, _, _)| async move {
-            if !thread_id.is_empty() {
-                get_thread_branches(thread_id).await.unwrap_or_default()
-            } else {
-                Vec::new()
-            }
-        }
+    // Use leptos-fetch resource for branches
+    let branches_resource = client.resource(
+        get_branches_query,
+        move || current_thread_id.get()
     );
+
+    // Manually invalidate when refetch trigger changes
+    Effect::new(move |_| {
+        if let Some(trigger) = refetch_trigger {
+            trigger.get(); // Subscribe to changes
+            let thread_id = current_thread_id.get();
+            client.invalidate_query(get_messages_query, &thread_id);
+            client.invalidate_query(get_branches_query, &thread_id);
+        }
+    });
 
     let combined_messages = move || -> Vec<DisplayMessage> {
-        let db_messages = messages_resource.try_get()
-            .and_then(|result| result?.ok())
+        let db_messages = messages_resource.get()
+            .and_then(|result| result.ok())
             .unwrap_or_default();
         
         let pending = pending_messages
@@ -84,11 +101,17 @@ pub fn MessageList(
         let thread_id = current_thread_id.get();
         
         async move {
-            match create_branch(thread_id, message_id, None).await {
+            match create_branch(thread_id.clone(), message_id, None).await {
                 Ok(new_thread_id) => {
                     log::info!("Created branch: {}", new_thread_id);
                     set_current_thread_id.set(new_thread_id);
-                    set_internal_refetch_trigger.update(|n| *n += 1);
+                    
+                    // Invalidate queries to refresh data
+                    let client: QueryClient = expect_context();
+                    client.invalidate_query(get_messages_query, current_thread_id.get());
+                    client.invalidate_query(get_branches_query, &thread_id);
+                    client.invalidate_query(crate::components::threadlist::get_threads_query, ());
+                    
                     Ok(())
                 }
                 Err(e) => {
@@ -102,7 +125,7 @@ pub fn MessageList(
     view! {
         <div class="h-full flex flex-col w-full overflow-hidden">
             <div class="flex-shrink-0 mb-4">
-                <Transition fallback=move || {
+                <Suspense fallback=move || {
                     view! {
                         <div class="animate-pulse bg-gray-300 dark:bg-teal-600 h-8 rounded-md"></div>
                     }
@@ -110,57 +133,69 @@ pub fn MessageList(
                     {move || {
                         branches_resource
                             .get()
-                            .map(|branches| {
-                                if !branches.is_empty() {
-                                    view! {
-                                        <div class="p-3 bg-gray-200 dark:bg-teal-700 rounded-lg border border-gray-300 dark:border-teal-600">
-                                            <h4 class="text-sm font-medium text-gray-700 dark:text-gray-200 mb-3">
-                                                "Thread Branches:"
-                                            </h4>
-                                            <div class="flex flex-wrap gap-2">
-                                                {branches
-                                                    .into_iter()
-                                                    .map(|branch| {
-                                                        let branch_id = branch.thread_id.clone();
-                                                        let is_current = current_thread_id.get() == branch_id;
-                                                        view! {
-                                                            <button
-                                                                class=format!(
-                                                                    "px-3 py-1.5 text-xs rounded-md font-medium transition-colors duration-200 {}",
-                                                                    if is_current {
-                                                                        "bg-seafoam-500 text-white shadow-md"
-                                                                    } else {
-                                                                        "bg-white dark:bg-teal-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-teal-500 border border-gray-300 dark:border-teal-500"
-                                                                    },
-                                                                )
-                                                                on:click=move |_| {
-                                                                    set_current_thread_id.set(branch_id.clone())
+                            .map(|branches_result| {
+                                match branches_result {
+                                    Ok(branches) => {
+                                        if !branches.is_empty() {
+                                            view! {
+                                                <div class="p-3 bg-gray-200 dark:bg-teal-700 rounded-lg border border-gray-300 dark:border-teal-600">
+                                                    <h4 class="text-sm font-medium text-gray-700 dark:text-gray-200 mb-3">
+                                                        "Thread Branches:"
+                                                    </h4>
+                                                    <div class="flex flex-wrap gap-2">
+                                                        {branches
+                                                            .into_iter()
+                                                            .map(|branch| {
+                                                                let branch_id = branch.thread_id.clone();
+                                                                let is_current = current_thread_id.get() == branch_id;
+                                                                view! {
+                                                                    <button
+                                                                        class=format!(
+                                                                            "px-3 py-1.5 text-xs rounded-md font-medium transition-colors duration-200 {}",
+                                                                            if is_current {
+                                                                                "bg-seafoam-500 text-white shadow-md"
+                                                                            } else {
+                                                                                "bg-white dark:bg-teal-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-teal-500 border border-gray-300 dark:border-teal-500"
+                                                                            },
+                                                                        )
+
+                                                                        on:click=move |_| {
+                                                                            set_current_thread_id.set(branch_id.clone())
+                                                                        }
+                                                                    >
+
+                                                                        <div class="inline-flex items-center gap-1">
+                                                                            <div class="rotate-180-mirror">
+                                                                                <Icon
+                                                                                    icon=icondata::MdiSourceBranch
+                                                                                    width="16"
+                                                                                    height="16"
+                                                                                />
+                                                                            </div>
+                                                                            {branch.branch_name.unwrap_or_else(|| "branch".to_string())}
+                                                                        </div>
+                                                                    </button>
                                                                 }
-                                                            >
-                                                                <div class="rotate-180-mirror">
-                                                                    <Icon icon=icondata::MdiSourceBranch width="16" height="16" />
-                                                                </div>
-                                                                {branch.branch_name.unwrap_or_else(|| "branch".to_string())}
-                                                            </button>
-                                                        }
-                                                    })
-                                                    .collect_view()}
-                                            </div>
-                                        </div>
+                                                            })
+                                                            .collect_view()}
+                                                    </div>
+                                                </div>
+                                            }
+                                                .into_any()
+                                        } else {
+                                            view! { <div></div> }.into_any()
+                                        }
                                     }
-                                        .into_any()
-                                } else {
-                                    view! { <div></div> }.into_any()
+                                    Err(_) => view! { <div></div> }.into_any(),
                                 }
                             })
                             .unwrap_or_else(|| view! { <div></div> }.into_any())
                     }}
 
-                </Transition>
+                </Suspense>
             </div>
-
             <div class="flex-1 overflow-y-auto overflow-x-hidden pr-2 min-w-0 w-full">
-                <Transition fallback=move || {
+                <Suspense fallback=move || {
                     view! {
                         <div class="space-y-4 w-full overflow-hidden">
                             <div class="animate-pulse bg-gray-200 dark:bg-teal-800 h-20 rounded-lg"></div>
@@ -181,7 +216,8 @@ pub fn MessageList(
                                         </div>
                                     </div>
                                 </div>
-                            }.into_any()
+                            }
+                                .into_any()
                         } else {
                             view! {
                                 <div class="space-y-4 w-full overflow-hidden">
@@ -213,7 +249,8 @@ pub fn MessageList(
                                                                             {message.content().to_string()}
                                                                         </p>
                                                                     </div>
-                                                                }.into_any()
+                                                                }
+                                                                    .into_any()
                                                             } else {
                                                                 view! {
                                                                     <div class="text-sm leading-relaxed text-left w-full max-w-full overflow-hidden">
@@ -222,7 +259,8 @@ pub fn MessageList(
                                                                             class="text-left w-full max-w-full"
                                                                         />
                                                                     </div>
-                                                                }.into_any()
+                                                                }
+                                                                    .into_any()
                                                             }}
 
                                                         </div>
@@ -239,9 +277,14 @@ pub fn MessageList(
                                                                                     create_branch_action.dispatch((db_id,));
                                                                                 }
                                                                             >
+
                                                                                 <div class="inline-flex items-center gap-1">
                                                                                     <div class="rotate-180-mirror">
-                                                                                        <Icon icon=icondata::MdiSourceBranchPlus width="16" height="16" />
+                                                                                        <Icon
+                                                                                            icon=icondata::MdiSourceBranchPlus
+                                                                                            width="16"
+                                                                                            height="16"
+                                                                                        />
                                                                                     </div>
                                                                                     {move || {
                                                                                         if create_branch_action.pending().get() {
@@ -250,23 +293,27 @@ pub fn MessageList(
                                                                                             ""
                                                                                         }
                                                                                     }}
+
                                                                                 </div>
                                                                             </button>
                                                                         </div>
-                                                                    }.into_any()
+                                                                    }
+                                                                        .into_any()
                                                                 } else {
                                                                     view! {
                                                                         <div class="mt-3">
                                                                             <span></span>
                                                                         </div>
-                                                                    }.into_any()
+                                                                    }
+                                                                        .into_any()
                                                                 }
                                                             } else {
                                                                 view! {
                                                                     <div class="mt-3">
                                                                         <span></span>
                                                                     </div>
-                                                                }.into_any()
+                                                                }
+                                                                    .into_any()
                                                             }
                                                         }}
 
@@ -277,11 +324,12 @@ pub fn MessageList(
                                     />
 
                                 </div>
-                            }.into_any()
+                            }
+                                .into_any()
                         }
                     }}
 
-                </Transition>
+                </Suspense>
             </div>
         </div>
     }
@@ -347,4 +395,251 @@ pub async fn get_messages_for_thread(_thread_id: String) -> Result<Vec<MessageVi
         .map_err(to_server_error)?;
 
     Ok(result.into_iter().map(MessageView::from).collect())
+}
+
+#[server(CreateBranch, "/api")]
+pub async fn create_branch(
+    source_thread_id: String,
+    branch_point_message_id: i32,
+    _branch_name: Option<String>,
+) -> Result<String, ServerFnError> {
+    use diesel::prelude::*;
+    use diesel_async::{RunQueryDsl, AsyncConnection};
+    use std::fmt;
+    use std::error::Error;
+    use crate::state::AppState;
+    use crate::models::conversations::{Thread, Message, NewMessage};
+    use crate::schema::{threads, messages};
+    use crate::auth::get_current_user;
+
+    #[derive(Debug)]
+    enum BranchError {
+        Pool(String),
+        Database(diesel::result::Error),
+        Unauthorized,
+        NotFound,
+    }
+
+    impl fmt::Display for BranchError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                BranchError::Pool(e) => write!(f, "pool error: {e}"),
+                BranchError::Database(e) => write!(f, "database error: {e}"),
+                BranchError::Unauthorized => write!(f, "unauthorized - user not logged in"),
+                BranchError::NotFound => write!(f, "source thread or message not found"),
+            }
+        }
+    }
+
+    impl Error for BranchError {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            match self {
+                BranchError::Database(e) => Some(e),
+                _ => None,
+            }
+        }
+    }
+
+    impl From<diesel::result::Error> for BranchError {
+        fn from(error: diesel::result::Error) -> Self {
+            BranchError::Database(error)
+        }
+    }
+
+    let current_user = get_current_user().await.map_err(|_| BranchError::Unauthorized)?;
+    let user_id = current_user.ok_or(BranchError::Unauthorized)?.id;
+
+    let app_state = use_context::<AppState>()
+        .expect("failed to get AppState from context");
+
+    let mut conn = app_state.pool
+        .get()
+        .await
+        .map_err(|e| BranchError::Pool(e.to_string()))?;
+
+    let new_thread_id = uuid::Uuid::new_v4().to_string();
+
+    let source_thread_id_clone = source_thread_id.clone();
+    let new_thread_id_clone = new_thread_id.clone();
+
+    let result = conn.transaction(|conn| {
+        Box::pin(async move {
+            // Verify source thread exists and user owns it
+            let _source_thread = threads::table
+                .find(&source_thread_id_clone)
+                .filter(threads::user_id.eq(user_id))
+                .first::<Thread>(conn)
+                .await
+                .optional()?
+                .ok_or(BranchError::NotFound)?;
+    
+            // Get the first message ID of the source thread to check if we're branching from the start
+            let first_message_id = messages::table
+                .filter(messages::thread_id.eq(&source_thread_id_clone))
+                .order(messages::id.asc())
+                .select(messages::id)
+                .first::<i32>(conn)
+                .await
+                .optional()?;
+    
+            let messages_to_copy = if let Some(first_id) = first_message_id {
+                if branch_point_message_id == first_id {
+                    // Branching from the very first message - create a fresh start with no messages
+                    Vec::new()
+                } else {
+                    // Normal branching - get messages before the branch point
+                    messages::table
+                        .filter(messages::thread_id.eq(&source_thread_id_clone))
+                        .filter(messages::id.lt(branch_point_message_id))
+                        .order(messages::id.asc())
+                        .load::<Message>(conn)
+                        .await?
+                }
+            } else {
+                // Source thread has no messages - nothing to copy
+                Vec::new()
+            };
+    
+            // Get ALL branch names for this user to find the highest number used
+            let all_branch_names: Vec<Option<String>> = threads::table
+                .filter(threads::user_id.eq(user_id))
+                .filter(threads::parent_thread_id.is_not_null()) // Only branches
+                .select(threads::branch_name)
+                .load(conn)
+                .await?;
+    
+            // Find the highest existing branch number across all user's branches
+            let mut highest_branch_number = 0;
+            for branch_name_opt in all_branch_names {
+                if let Some(branch_name) = branch_name_opt {
+                    if let Ok(num) = branch_name.parse::<i32>() {
+                        if num > highest_branch_number {
+                            highest_branch_number = num;
+                        }
+                    }
+                }
+            }
+    
+            // Generate next sequential branch name
+            let branch_name = format!("{}", highest_branch_number + 1);
+    
+            // Create new thread
+            let new_thread = Thread {
+                id: new_thread_id_clone.clone(),
+                created_at: Some(chrono::Utc::now().naive_utc()),
+                updated_at: Some(chrono::Utc::now().naive_utc()),
+                user_id: Some(user_id),
+                parent_thread_id: Some(source_thread_id_clone.clone()),
+                branch_point_message_id: Some(branch_point_message_id),
+                branch_name: Some(branch_name),
+            };
+    
+            diesel::insert_into(threads::table)
+                .values(&new_thread)
+                .execute(conn)
+                .await?;
+    
+            // Copy messages to new thread with new IDs (if any)
+            for message in messages_to_copy {
+                let new_message = NewMessage {
+                    thread_id: new_thread_id_clone.clone(),
+                    content: message.content,
+                    role: message.role,
+                    active_model: message.active_model,
+                    active_lab: message.active_lab,
+                    user_id: Some(user_id),
+                };
+    
+                diesel::insert_into(messages::table)
+                    .values(&new_message)
+                    .execute(conn)
+                    .await?;
+            }
+    
+            Ok::<String, BranchError>(new_thread_id_clone)
+        })
+    })
+    .await?;
+
+    log::info!("Created branch {} from thread {} at message {}", result, source_thread_id, branch_point_message_id);
+    Ok(result)
+}
+
+#[server(GetThreadBranches, "/api")]
+pub async fn get_thread_branches(thread_id: String) -> Result<Vec<BranchInfo>, ServerFnError> {
+    use diesel::prelude::*;
+    use diesel_async::RunQueryDsl;
+    use std::fmt;
+    use std::error::Error;
+    use crate::state::AppState;
+    use crate::models::conversations::Thread;
+    use crate::schema::threads;
+    use crate::auth::get_current_user;
+    
+    #[derive(Debug)]
+    enum BranchError {
+        Pool(String),
+        Database(diesel::result::Error),
+        Unauthorized,
+    }
+    
+    impl fmt::Display for BranchError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                BranchError::Pool(e) => write!(f, "pool error: {e}"),
+                BranchError::Database(e) => write!(f, "database error: {e}"),
+                BranchError::Unauthorized => write!(f, "unauthorized - user not logged in"),
+            }
+        }
+    }
+    
+    impl Error for BranchError {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            match self {
+                BranchError::Database(e) => Some(e),
+                _ => None,
+            }
+        }
+    }
+    
+    let current_user = get_current_user().await.map_err(|_| BranchError::Unauthorized)?;
+    let user_id = current_user.ok_or(BranchError::Unauthorized)?.id;
+    
+    let app_state = use_context::<AppState>()
+        .expect("failed to get AppState from context");
+    
+    let mut conn = app_state.pool
+        .get()
+        .await
+        .map_err(|e| BranchError::Pool(e.to_string()))?;
+    
+    // Find all branches of this thread, ordered by branch_name as integer
+    let mut branches = threads::table
+        .filter(threads::parent_thread_id.eq(&thread_id))
+        .filter(threads::user_id.eq(user_id))
+        .order(threads::created_at.desc())
+        .load::<Thread>(&mut conn)
+        .await
+        .map_err(BranchError::Database)?;
+
+    // Sort by branch_name as integers (1, 2, 3, etc.)
+    branches.sort_by(|a, b| {
+        let a_num: i32 = a.branch_name.as_ref().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let b_num: i32 = b.branch_name.as_ref().and_then(|s| s.parse().ok()).unwrap_or(0);
+        a_num.cmp(&b_num)
+    });
+    
+    // Convert to BranchInfo with simplified data
+    let branch_infos: Vec<BranchInfo> = branches
+        .into_iter()
+        .map(|branch| BranchInfo {
+            thread_id: branch.id,
+            branch_name: branch.branch_name,
+            model: "mixed".to_string(), // Since branches can have multiple models
+            lab: "mixed".to_string(),   // Since branches can have multiple labs
+            created_at: branch.created_at.map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
+        })
+        .collect();
+    
+    Ok(branch_infos)
 }

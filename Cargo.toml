@@ -41,6 +41,7 @@ js-sys = "0.3.77"
 jsonwebtoken = { version = "9.2.0", optional = true }
 leptos = { version = "0.8.0", features = ["nightly"] }
 leptos_axum = { version = "0.8.0", optional = true }
+leptos-fetch = { version = "=0.4.2", features = ["devtools"] }
 leptos_icons = { version = "0.6.1" }
 leptos_meta = { version = "0.8.0" }
 leptos_router = { version = "0.8.0", features = ["nightly"] }
@@ -103,6 +104,7 @@ ssr = [
     "dep:tracing",
     "dep:url",
     "leptos/ssr",
+    "leptos-fetch/ssr",
     "leptos_meta/ssr",
     "leptos_router/ssr",
 ]

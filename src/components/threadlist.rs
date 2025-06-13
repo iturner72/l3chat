@@ -1,233 +1,22 @@
 use leptos::prelude::*;
 use leptos_icons::Icon;
+use leptos_fetch::QueryClient;
 use log::error;
 use web_sys::Event;
 
+use crate::auth::{context::AuthContext, get_current_user};
 use crate::models::conversations::ThreadView;
 
-#[component]
-pub fn ThreadList(
-    current_thread_id: ReadSignal<String>,
-    #[prop(into)] set_current_thread_id: Callback<String>,
-) -> impl IntoView {
-    // Use Resource instead of spawn_local for SSR compatibility
-    let threads_resource = Resource::new(
-        || (), // No dependencies, loads once
-        |_| async move { get_threads().await }
-    );
-
-    let (search_query, set_search_query) = signal(String::new());
-    
-    let search_resource = Resource::new(
-        move || search_query.get(),
-        |query| async move {
-            if query.is_empty() {
-                get_threads().await
-            } else {
-                search_threads(query).await
-            }
-        }
-    );
-
-    let handle_search = move |ev: Event| {
-        let query = event_target_value(&ev);
-        set_search_query.set(query);
-    };
-
-    let delete_thread_action = Action::new(move |thread_id: &String| {
-        let thread_id = thread_id.clone();
-        let current_id = current_thread_id.get_untracked(); 
-        async move {
-            match delete_thread(thread_id.clone()).await {
-                Ok(_) => {
-                    threads_resource.refetch();
-                    search_resource.refetch();
-
-                    if current_id == thread_id {
-                        match get_threads().await {
-                            Ok(updated_threads) => {
-                                if let Some(next_thread) = updated_threads.first() {
-                                    set_current_thread_id.run(next_thread.id.clone());
-                                } else {
-                                    log::info!("no threads left gang");
-                                    set_current_thread_id.run(String::new());
-                                }
-                            }
-                            Err(e) => {
-                                error!("failed to fetch updated threads: {e:?}");
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("failed to delete thread: {e:?}");
-                }
-            }
-        }
-    });
-
-    // Helper function to build thread tree structure - make it deterministic
-    let build_thread_tree = |threads: Vec<ThreadView>| -> Vec<ThreadNode> {
-        let mut all_nodes: std::collections::BTreeMap<String, ThreadNode> = threads
-            .into_iter()
-            .map(|thread| {
-                let id = thread.id.clone();
-                (id, ThreadNode {
-                    thread,
-                    children: Vec::new(),
-                })
-            })
-            .collect();
-
-        // Collect parent-child relationships and sort them for deterministic order
-        let mut relationships: Vec<(String, String)> = Vec::new(); // (child_id, parent_id)
-        for node in all_nodes.values() {
-            if let Some(parent_id) = &node.thread.parent_thread_id {
-                relationships.push((node.thread.id.clone(), parent_id.clone()));
-            }
-        }
-        
-        // Sort relationships for deterministic processing
-        relationships.sort();
-
-        // Move children to their parents
-        for (child_id, parent_id) in relationships {
-            if all_nodes.contains_key(&parent_id) {
-                if let Some(child_node) = all_nodes.remove(&child_id) {
-                    if let Some(parent_node) = all_nodes.get_mut(&parent_id) {
-                        parent_node.children.push(child_node);
-                    }
-                }
-            }
-        }
-
-        // Sort children within each parent by creation time for consistency
-        for node in all_nodes.values_mut() {
-            node.children.sort_by(|a, b| {
-                a.thread.created_at.cmp(&b.thread.created_at)
-            });
-        }
-
-        // Collect remaining nodes (these are roots) and sort by creation time
-        let mut roots: Vec<ThreadNode> = all_nodes.into_values().collect();
-        roots.sort_by(|a, b| {
-            b.thread.created_at.cmp(&a.thread.created_at)
-        });
-
-        roots
-    };
-
-    view! {
-        <div class="thread-list-container flex flex-col items-start pt-2">
-            <div class="relative flex items-center w-7/12">
-                <input
-                    type="text"
-                    placeholder="grep threads"
-                    on:input=handle_search
-                    class="grep-box w-full pr-10 p-2 mb-2 bg-gray-100 dark:bg-teal-800 text-teal-600 dark:text-mint-400
-                    border-0 border-gray-300 dark:border-teal-600 focus:border-teal-500 dark:focus:border-mint-300
-                    focus:outline-none transition duration-0 ease-in-out"
-                />
-                <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    class="h-5 w-5 absolute right-3 text-gray-400 dark:text-teal-500"
-                    viewBox="0 1 20 20"
-                    fill="currentColor"
-                >
-                    <path
-                        fill-rule="evenodd"
-                        d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
-                        clip-rule="evenodd"
-                    ></path>
-                </svg>
-            </div>
-
-            <Suspense fallback=move || {
-                view! {
-                    <div class="w-7/12">
-                        <p class="text-gray-500 dark:text-gray-400 text-sm">"Loading threads..."</p>
-                    </div>
-                }
-            }>
-                <For
-                    each=move || {
-                        let resource = if !search_query.get().is_empty() {
-                            search_resource.get()
-                        } else {
-                            threads_resource.get()
-                        };
-                        resource
-                            .map(|result| {
-                                match result {
-                                    Ok(thread_list) => {
-                                        if thread_list.is_empty() {
-                                            Vec::new()
-                                        } else {
-                                            build_thread_tree(thread_list)
-                                        }
-                                    }
-                                    Err(_) => Vec::new(),
-                                }
-                            })
-                            .unwrap_or_default()
-                    }
-
-                    key=|root_node| root_node.thread.id.clone()
-                    children=move |root_node| {
-                        view! {
-                            <ThreadTreeNode
-                                node=root_node
-                                current_thread_id=current_thread_id
-                                set_current_thread_id=set_current_thread_id
-                                delete_action=delete_thread_action
-                                depth=0
-                            />
-                        }
-                    }
-                />
-
-                {move || {
-                    let resource = if !search_query.get().is_empty() {
-                        search_resource.get()
-                    } else {
-                        threads_resource.get()
-                    };
-                    if let Some(Ok(thread_list)) = resource {
-                        if thread_list.is_empty() {
-                            view! {
-                                <div class="w-7/12">
-                                    <p class="text-gray-500 dark:text-gray-400 text-sm">
-                                        "No threads found"
-                                    </p>
-                                </div>
-                            }
-                                .into_any()
-                        } else {
-                            view! { <div></div> }.into_any()
-                        }
-                    } else if let Some(Err(e)) = resource {
-                        view! {
-                            <div class="w-7/12">
-                                <div class="text-red-500 text-sm">
-                                    "Error loading threads: " {e.to_string()}
-                                </div>
-                            </div>
-                        }
-                            .into_any()
-                    } else {
-                        view! { <div></div> }.into_any()
-                    }
-                }}
-
-            </Suspense>
-        </div>
-    }
+pub async fn get_threads_query() -> Result<Vec<ThreadView>, String> {
+    get_threads().await.map_err(|e| e.to_string())
 }
 
-#[derive(Debug, Clone)]
-struct ThreadNode {
-    thread: ThreadView,
-    children: Vec<ThreadNode>,
+async fn search_threads_query(query: String) -> Result<Vec<ThreadView>, String> {
+    if query.is_empty() {
+        get_threads().await.map_err(|e| e.to_string())
+    } else {
+        search_threads(query).await.map_err(|e| e.to_string())
+    }
 }
 
 #[component]
@@ -264,7 +53,7 @@ fn ThreadTreeNode(
                 (
                     view! {
                         <div class="rotate-180-mirror">
-                            <Icon icon=icondata::MdiSourceBranch width="16" height="16" />
+                            <Icon icon=icondata::MdiSourceBranch width="16" height="16"/>
                         </div>
                     }.into_any(),
                     "border-seafoam-500 bg-seafoam-600 dark:bg-seafoam-700",
@@ -274,7 +63,7 @@ fn ThreadTreeNode(
                 (
                     view! {
                         <div class="rotate-180-mirror">
-                            <Icon icon=icondata::MdiSourceBranch width="16" height="16" />
+                            <Icon icon=icondata::MdiSourceBranch width="16" height="16"/>
                         </div>
                     }.into_any(),
                     "border-gray-600 bg-gray-200 dark:bg-teal-700 hover:border-seafoam-600 hover:bg-gray-300 dark:hover:bg-teal-600",
@@ -434,6 +223,347 @@ fn ThreadTreeNode(
             </div>
         </div>
     }.into_any()
+}
+
+// Helper function to build thread tree structure - make it deterministic
+fn build_thread_tree(threads: Vec<ThreadView>) -> Vec<ThreadNode> {
+    let mut all_nodes: std::collections::BTreeMap<String, ThreadNode> = threads
+        .into_iter()
+        .map(|thread| {
+            let id = thread.id.clone();
+            (id, ThreadNode {
+                thread,
+                children: Vec::new(),
+            })
+        })
+        .collect();
+
+    // Collect parent-child relationships and sort them for deterministic order
+    let mut relationships: Vec<(String, String)> = Vec::new(); // (child_id, parent_id)
+    for node in all_nodes.values() {
+        if let Some(parent_id) = &node.thread.parent_thread_id {
+            relationships.push((node.thread.id.clone(), parent_id.clone()));
+        }
+    }
+    
+    // Sort relationships for deterministic processing
+    relationships.sort();
+
+    // Move children to their parents
+    for (child_id, parent_id) in relationships {
+        if all_nodes.contains_key(&parent_id) {
+            if let Some(child_node) = all_nodes.remove(&child_id) {
+                if let Some(parent_node) = all_nodes.get_mut(&parent_id) {
+                    parent_node.children.push(child_node);
+                }
+            }
+        }
+    }
+
+    // Sort children within each parent by creation time for consistency
+    for node in all_nodes.values_mut() {
+        node.children.sort_by(|a, b| {
+            a.thread.created_at.cmp(&b.thread.created_at)
+        });
+    }
+
+    // Collect remaining nodes (these are roots) and sort by creation time
+    let mut roots: Vec<ThreadNode> = all_nodes.into_values().collect();
+    roots.sort_by(|a, b| {
+        b.thread.created_at.cmp(&a.thread.created_at)
+    });
+
+    roots
+}
+
+#[derive(Debug, Clone)]
+struct ThreadNode {
+    thread: ThreadView,
+    children: Vec<ThreadNode>,
+}
+
+#[component]
+fn UserInfo() -> impl IntoView {
+    let auth = use_context::<AuthContext>().expect("AuthContext not found");
+    let current_user = Resource::new(|| (), |_| get_current_user());
+
+    view! {
+        <div class="border-t border-gray-400 dark:border-teal-600 pt-3 mt-3">
+            <Suspense fallback=|| {
+                view! {
+                    <div class="flex items-center space-x-3 p-3 bg-gray-100 dark:bg-teal-700 rounded-lg">
+                        <div class="w-10 h-10 bg-gray-300 dark:bg-teal-600 rounded-full animate-pulse"></div>
+                        <div class="flex-1 space-y-1">
+                            <div class="h-4 bg-gray-300 dark:bg-teal-600 rounded animate-pulse"></div>
+                            <div class="h-3 bg-gray-300 dark:bg-teal-600 rounded w-3/4 animate-pulse"></div>
+                        </div>
+                    </div>
+                }
+            }>
+                {move || {
+                    if auth.is_loading.get() {
+                        view! {
+                            <div class="flex items-center space-x-3 p-3 bg-gray-100 dark:bg-teal-700 rounded-lg">
+                                <div class="w-10 h-10 bg-gray-300 dark:bg-teal-600 rounded-full animate-pulse"></div>
+                                <div class="flex-1">
+                                    <div class="text-sm text-gray-500 dark:text-gray-400">
+                                        "Loading..."
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                            .into_any()
+                    } else if auth.is_authenticated.get() {
+                        current_user
+                            .get()
+                            .map(|user_result| {
+                                match user_result {
+                                    Ok(Some(user)) => {
+                                        view! {
+                                            <a
+                                                href="/admin-panel"
+                                                class="flex items-center space-x-3 p-3 bg-gray-100 dark:bg-teal-700 rounded-lg hover:bg-gray-200 dark:hover:bg-teal-600 transition-colors cursor-pointer group"
+                                            >
+                                                {user
+                                                    .avatar_url
+                                                    .as_ref()
+                                                    .map(|avatar| {
+                                                        view! {
+                                                            <img
+                                                                src=avatar.clone()
+                                                                alt="User avatar"
+                                                                class="w-10 h-10 rounded-full border-2 border-gray-300 dark:border-teal-500"
+                                                            />
+                                                        }
+                                                            .into_any()
+                                                    })
+                                                    .unwrap_or_else(|| {
+                                                        view! {
+                                                            <div class="w-10 h-10 bg-gray-300 dark:bg-teal-500 rounded-full flex items-center justify-center text-gray-600 dark:text-gray-300">
+                                                                "👤"
+                                                            </div>
+                                                        }
+                                                            .into_any()
+                                                    })}
+
+                                                <div class="flex-1 min-w-0">
+                                                    <p class="text-sm font-medium text-gray-800 dark:text-gray-200 truncate group-hover:text-gray-900 dark:group-hover:text-white">
+                                                        {user
+                                                            .display_name
+                                                            .clone()
+                                                            .or(user.username.clone())
+                                                            .unwrap_or_else(|| "Anonymous".to_string())}
+                                                    </p>
+                                                    <p class="text-xs text-gray-500 dark:text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300">
+                                                        "free"
+                                                    </p>
+                                                </div>
+                                                <div class="text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300">
+                                                    "›"
+                                                </div>
+                                            </a>
+                                        }
+                                            .into_any()
+                                    }
+                                    Ok(None) => {
+                                        view! {
+                                            <a
+                                                href="/admin"
+                                                class="flex items-center justify-center p-3 bg-seafoam-500 dark:bg-seafoam-600 text-white rounded-lg hover:bg-seafoam-600 dark:hover:bg-seafoam-700 transition-colors"
+                                            >
+                                                "Sign In"
+                                            </a>
+                                        }
+                                            .into_any()
+                                    }
+                                    Err(_) => {
+                                        view! {
+                                            <div class="flex items-center justify-center p-3 bg-red-100 dark:bg-red-900 text-red-600 dark:text-red-400 rounded-lg text-sm">
+                                                "Error loading user"
+                                            </div>
+                                        }
+                                            .into_any()
+                                    }
+                                }
+                            })
+                            .unwrap_or_else(|| {
+                                view! {
+                                    <div class="flex items-center justify-center p-3 bg-gray-200 dark:bg-teal-700 rounded-lg text-sm text-gray-500 dark:text-gray-400">
+                                        "Loading user..."
+                                    </div>
+                                }
+                                    .into_any()
+                            })
+                    } else {
+                        view! {
+                            <a
+                                href="/admin"
+                                class="flex items-center justify-center p-3 bg-seafoam-500 dark:bg-seafoam-600 text-white rounded-lg hover:bg-seafoam-600 dark:hover:bg-seafoam-700 transition-colors"
+                            >
+                                "Sign In"
+                            </a>
+                        }
+                            .into_any()
+                    }
+                }}
+
+            </Suspense>
+        </div>
+    }
+}
+
+#[component]
+pub fn ThreadList(
+    current_thread_id: ReadSignal<String>,
+    #[prop(into)] set_current_thread_id: Callback<String>,
+) -> impl IntoView {
+    let client: QueryClient = expect_context();
+    let (search_query, set_search_query) = signal(String::new());
+
+    let threads_resource = client.resource(get_threads_query, || ());
+    
+    let search_resource = client.resource(search_threads_query, move || search_query.get());
+
+    let handle_search = move |ev: Event| {
+        let query = event_target_value(&ev);
+        set_search_query.set(query);
+    };
+
+    let delete_thread_action = Action::new(move |thread_id: &String| {
+        let thread_id = thread_id.clone();
+        let current_id = current_thread_id.get_untracked(); 
+        async move {
+            match delete_thread(thread_id.clone()).await {
+                Ok(_) => {
+                    let client: QueryClient = expect_context();
+                    client.invalidate_query(get_threads_query, ());
+                    client.invalidate_query(search_threads_query, search_query.get_untracked());
+
+                    if current_id == thread_id {
+                        // Get fresh threads to find next one
+                        match get_threads().await {
+                            Ok(updated_threads) => {
+                                if let Some(next_thread) = updated_threads.first() {
+                                    set_current_thread_id.run(next_thread.id.clone());
+                                } else {
+                                    log::info!("no threads left");
+                                    set_current_thread_id.run(String::new());
+                                }
+                            }
+                            Err(e) => {
+                                error!("failed to fetch updated threads: {e:?}");
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("failed to delete thread: {e:?}");
+                }
+            }
+        }
+    });
+
+    let current_threads = move || {
+        if search_query.get().is_empty() {
+            threads_resource.get()
+        } else {
+            search_resource.get()
+        }
+    };
+
+    view! {
+        <div class="thread-list-container flex flex-col h-full">
+            <div class="flex-shrink-0">
+                <div class="relative flex items-center w-full">
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        class="h-5 w-5 absolute right-3 text-gray-400 dark:text-teal-500"
+                        viewBox="0 1 20 20"
+                        fill="currentColor"
+                    >
+                        <path
+                            fill-rule="evenodd"
+                            d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
+                            clip-rule="evenodd"
+                        ></path>
+                    </svg>
+                    <input
+                        type="text"
+                        placeholder="grep your threads"
+                        on:input=handle_search
+                        class="grep-box w-full pr-10 p-2 mb-2 bg-gray-100 dark:bg-teal-800 text-teal-600 dark:text-mint-400
+                        border-0 border-gray-300 dark:border-teal-600 focus:border-teal-500 dark:focus:border-mint-300
+                        focus:outline-none transition duration-0 ease-in-out"
+                    />
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto">
+                <Transition fallback=move || {
+                    view! {
+                        <div class="w-full">
+                            <p class="text-gray-500 dark:text-gray-400 text-sm">
+                                "Loading threads..."
+                            </p>
+                        </div>
+                    }
+                }>
+                    {move || {
+                        match current_threads() {
+                            Some(Ok(thread_list)) => {
+                                if thread_list.is_empty() {
+                                    view! {
+                                        <div class="w-full">
+                                            <p class="text-gray-500 dark:text-gray-400 text-sm">
+                                                "No threads found"
+                                            </p>
+                                        </div>
+                                    }
+                                        .into_any()
+                                } else {
+                                    let tree_nodes = build_thread_tree(thread_list);
+                                    view! {
+                                        <For
+                                            each=move || tree_nodes.clone()
+                                            key=|root_node| root_node.thread.id.clone()
+                                            children=move |root_node| {
+                                                view! {
+                                                    <ThreadTreeNode
+                                                        node=root_node
+                                                        current_thread_id=current_thread_id
+                                                        set_current_thread_id=set_current_thread_id
+                                                        delete_action=delete_thread_action
+                                                        depth=0
+                                                    />
+                                                }
+                                            }
+                                        />
+                                    }
+                                        .into_any()
+                                }
+                            }
+                            Some(Err(e)) => {
+                                view! {
+                                    <div class="w-full">
+                                        <div class="text-red-500 text-sm">
+                                            "Error loading threads: " {e}
+                                        </div>
+                                    </div>
+                                }
+                                    .into_any()
+                            }
+                            None => view! { <div></div> }.into_any(),
+                        }
+                    }}
+
+                </Transition>
+            </div>
+
+            <div class="flex-shrink-0">
+                <UserInfo/>
+            </div>
+        </div>
+    }
 }
 
 
@@ -662,210 +792,6 @@ pub async fn get_threads() -> Result<Vec<ThreadView>, ServerFnError> {
     Ok(result.into_iter().map(ThreadView::from).collect())
 }
 
-#[server(CreateBranch, "/api")]
-pub async fn create_branch(
-    source_thread_id: String,
-    branch_point_message_id: i32,
-    _branch_name: Option<String>, // Optional parameter for custom naming
-) -> Result<String, ServerFnError> {
-    use diesel::prelude::*;
-    use diesel_async::{RunQueryDsl, AsyncConnection};
-    use std::fmt;
-    use std::error::Error;
-    use crate::state::AppState;
-    use crate::models::conversations::{Thread, Message, NewMessage};
-    use crate::schema::{threads, messages};
-    use crate::auth::get_current_user;
-
-    #[derive(Debug)]
-    enum BranchError {
-        Pool(String),
-        Database(diesel::result::Error),
-        Unauthorized,
-        NotFound,
-    }
-
-    impl fmt::Display for BranchError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self {
-                BranchError::Pool(e) => write!(f, "pool error: {e}"),
-                BranchError::Database(e) => write!(f, "database error: {e}"),
-                BranchError::Unauthorized => write!(f, "unauthorized - user not logged in"),
-                BranchError::NotFound => write!(f, "source thread or message not found"),
-            }
-        }
-    }
-
-    impl Error for BranchError {
-        fn source(&self) -> Option<&(dyn Error + 'static)> {
-            match self {
-                BranchError::Database(e) => Some(e),
-                _ => None,
-            }
-        }
-    }
-
-    impl From<diesel::result::Error> for BranchError {
-        fn from(error: diesel::result::Error) -> Self {
-            BranchError::Database(error)
-        }
-    }
-
-    let current_user = get_current_user().await.map_err(|_| BranchError::Unauthorized)?;
-    let user_id = current_user.ok_or(BranchError::Unauthorized)?.id;
-
-    let app_state = use_context::<AppState>()
-        .expect("failed to get AppState from context");
-
-    let mut conn = app_state.pool
-        .get()
-        .await
-        .map_err(|e| BranchError::Pool(e.to_string()))?;
-
-    let new_thread_id = uuid::Uuid::new_v4().to_string();
-
-    let source_thread_id_clone = source_thread_id.clone();
-    let new_thread_id_clone = new_thread_id.clone();
-
-    // Helper function to reconstruct conversation history recursively
-    fn get_full_conversation_history<'a>(
-        conn: &'a mut diesel_async::AsyncPgConnection,
-        thread_id: &'a str,
-        branch_point_message_id: i32,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<Message>, diesel::result::Error>> + Send + 'a>> {
-        Box::pin(async move {
-            // Get the source thread
-            let source_thread = threads::table
-                .find(thread_id)
-                .first::<Thread>(conn)
-                .await?;
-
-            let mut all_messages = Vec::new();
-
-            // If this thread has a parent, get the conversation history from the parent first
-            if let Some(parent_thread_id) = &source_thread.parent_thread_id {
-                if let Some(parent_branch_point) = source_thread.branch_point_message_id {
-                    // Recursively get messages from parent up to its branch point
-                    let parent_messages = get_full_conversation_history(
-                        conn, 
-                        parent_thread_id, 
-                        parent_branch_point
-                    ).await?;
-                    all_messages.extend(parent_messages);
-                }
-            }
-
-            // Get messages from the current thread
-            let current_messages = if source_thread.parent_thread_id.is_some() {
-                // If this is a branch, get messages from this thread up to (but not including) the branch point
-                messages::table
-                    .filter(messages::thread_id.eq(thread_id))
-                    .filter(messages::id.lt(branch_point_message_id))
-                    .order(messages::id.asc())
-                    .load::<Message>(conn)
-                    .await?
-            } else {
-                // If this is a root thread, get messages up to (but not including) the branch point
-                messages::table
-                    .filter(messages::thread_id.eq(thread_id))
-                    .filter(messages::id.lt(branch_point_message_id))
-                    .order(messages::id.asc())
-                    .load::<Message>(conn)
-                    .await?
-            };
-
-            all_messages.extend(current_messages);
-            Ok(all_messages)
-        })
-    }
-
-    let result = conn.transaction(|conn| {
-        Box::pin(async move {
-            // Verify source thread exists and user owns it
-            let _source_thread = threads::table
-                .find(&source_thread_id_clone)
-                .filter(threads::user_id.eq(user_id))
-                .first::<Thread>(conn)
-                .await
-                .optional()?
-                .ok_or(BranchError::NotFound)?;
-
-            // Get ALL branch names for this user to find the highest number used
-            let all_branch_names: Vec<Option<String>> = threads::table
-                .filter(threads::user_id.eq(user_id))
-                .filter(threads::parent_thread_id.is_not_null()) // Only branches
-                .select(threads::branch_name)
-                .load(conn)
-                .await?;
-
-            // Find the highest existing branch number across all user's branches
-            let mut highest_branch_number = 0;
-            for branch_name_opt in all_branch_names {
-                if let Some(branch_name) = branch_name_opt {
-                    if let Ok(num) = branch_name.parse::<i32>() {
-                        if num > highest_branch_number {
-                            highest_branch_number = num;
-                        }
-                    }
-                }
-            }
-
-            // Generate next sequential branch name
-            let branch_name = format!("{}", highest_branch_number + 1);
-
-            // Get the full conversation history up to the branch point
-            let messages_to_copy = get_full_conversation_history(
-                conn,
-                &source_thread_id_clone,
-                branch_point_message_id
-            ).await?;
-
-            if messages_to_copy.is_empty() {
-                return Err(BranchError::NotFound);
-            }
-
-            // Create new thread
-            let new_thread = Thread {
-                id: new_thread_id_clone.clone(),
-                created_at: Some(chrono::Utc::now().naive_utc()),
-                updated_at: Some(chrono::Utc::now().naive_utc()),
-                user_id: Some(user_id),
-                parent_thread_id: Some(source_thread_id_clone.clone()),
-                branch_point_message_id: Some(branch_point_message_id),
-                branch_name: Some(branch_name),
-            };
-
-            diesel::insert_into(threads::table)
-                .values(&new_thread)
-                .execute(conn)
-                .await?;
-
-            // Copy messages to new thread with new IDs
-            for message in messages_to_copy {
-                let new_message = NewMessage {
-                    thread_id: new_thread_id_clone.clone(),
-                    content: message.content,
-                    role: message.role,
-                    active_model: message.active_model,
-                    active_lab: message.active_lab,
-                    user_id: Some(user_id),
-                };
-
-                diesel::insert_into(messages::table)
-                    .values(&new_message)
-                    .execute(conn)
-                    .await?;
-            }
-
-            Ok(new_thread_id_clone)
-        })
-    })
-    .await?;
-
-    log::info!("Created branch {} from thread {} at message {}", result, source_thread_id, branch_point_message_id);
-    Ok(result)
-}
-
 #[server(GetThreadBranches, "/api")]
 pub async fn get_thread_branches(thread_id: String) -> Result<Vec<crate::models::conversations::BranchInfo>, ServerFnError> {
     use diesel::prelude::*;
@@ -944,3 +870,4 @@ pub async fn get_thread_branches(thread_id: String) -> Result<Vec<crate::models:
     
     Ok(branch_infos)
 }
+

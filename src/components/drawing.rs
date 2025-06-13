@@ -13,16 +13,16 @@ pub fn DrawingPage() -> impl IntoView {
                     href="/"
                     class="text-3xl text-left text-seafoam-600 dark:text-mint-400 ib pl-4 p-4 font-bold"
                 >
-                    "bryptoblogs"
+                    "l3chat"
                 </a>
-                <AuthNav />
+                <AuthNav/>
             </div>
 
             <div class="container mx-auto py-6">
-                <DrawingCanvas />
+                <DrawingCanvas/>
             </div>
 
-            <Footer />
+            <Footer/>
         </div>
     }
 }

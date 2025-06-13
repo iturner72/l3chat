@@ -1,16 +1,15 @@
 use leptos::prelude::*;
+use leptos_fetch::QueryClient;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
     components::{Route, Router, Routes},
     path, StaticSegment,
 };
+use std::time::Duration;
 
 use crate::auth::auth_components::{AdminLogin, ProtectedAdminPanel};
 use crate::auth::context::AuthProvider;
-use crate::components::auth_nav::AuthNav;
 use crate::components::drawing::DrawingPage;
-use crate::components::footer::Footer;
-use crate::components::poasts::Poasts;
 use crate::pages::writersroom::WritersRoom;
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
@@ -36,48 +35,29 @@ pub fn App() -> impl IntoView {
     // Provides context that manages stylesheets, titles, meta tags, etc.
     provide_meta_context();
 
+    // Initialize QueryClient with global options and provide to context
+    let client = QueryClient::new().with_options(
+        leptos_fetch::QueryOptions::new()
+            .with_stale_time(Duration::from_secs(60))
+            .with_gc_time(Duration::from_secs(300)),
+    );
+
+    client.provide();
+
     view! {
         <Stylesheet id="leptos" href="/pkg/l3chat.css"/>
-        <Title text="Welcome to Leptos"/>
+        <Title text="Welcome to l3chat"/>
         <AuthProvider>
             <Router>
                 <main>
                     <Routes fallback=|| "Page not found.".into_view()>
-                        <Route path=StaticSegment("") view=HomePage/>
+                        <Route path=StaticSegment("") view=WritersRoom/>
                         <Route path=path!("admin") view=AdminLogin/>
                         <Route path=path!("admin-panel") view=ProtectedAdminPanel/>
-                        <Route path=path!("writersroom") view=WritersRoom/>
                         <Route path=path!("draw") view=DrawingPage/>
                     </Routes>
                 </main>
             </Router>
         </AuthProvider>
-    }
-}
-
-#[component]
-fn HomePage() -> impl IntoView {
-    view! {
-        <div class="w-full mx-auto pl-2 bg-gray-100 dark:bg-teal-900">
-            <div class="flex justify-between items-center">
-                <a
-                    href="/"
-                    class="text-3xl text-left text-seafoam-600 dark:text-mint-400 ib pl-4 p-4 font-bold"
-                >
-                    "l3chat"
-                </a>
-                <AuthNav/>
-            </div>
-            <Poasts/>
-            <div class="container mx-auto p-4 flex justify-center">
-                <a
-                    href="/draw"
-                    class="bg-teal-500 hover:bg-teal-600 text-white font-bold py-2 px-4 rounded transition-colors"
-                >
-                    "Try Collaborative Drawing"
-                </a>
-            </div>
-            <Footer/>
-        </div>
     }
 }

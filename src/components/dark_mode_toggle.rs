@@ -1,4 +1,5 @@
 use leptos::{prelude::*, task::spawn_local};
+use leptos_icons::Icon;
 use web_sys::window;
 
 #[cfg(feature = "ssr")]
@@ -67,8 +68,21 @@ pub fn DarkModeToggle() -> impl IntoView {
     };
 
     view! {
-        <button on:click=toggle_dark_mode>
-            {move || if is_dark.get() { "🌞" } else { "🌙" }}
+        <button
+            on:click=toggle_dark_mode
+            class="text-teal-700 dark:text-teal-100 hover:text-teal-600 dark:hover:text-teal-200 
+            px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
+            border border-gray-600 dark:border-gray-500 hover:border-gray-800 dark:hover:border-gray-400 
+            rounded transition-colors duration-100 flex items-center justify-center"
+        >
+            {move || {
+                if is_dark.get() {
+                    view! { <Icon icon=icondata::FiSun width="16" height="16"/> }
+                } else {
+                    view! { <Icon icon=icondata::LuMoon width="16" height="16"/> }
+                }
+            }}
+
         </button>
     }
 }
