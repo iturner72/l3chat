@@ -3,6 +3,7 @@ use leptos_icons::Icon;
 use leptos_fetch::QueryClient;
 use log::error;
 use web_sys::Event;
+use cfg_if::cfg_if;
 
 use crate::auth::{context::AuthContext, get_current_user};
 use crate::models::conversations::ThreadView;
@@ -16,6 +17,311 @@ async fn search_threads_query(query: String) -> Result<Vec<ThreadView>, String> 
         get_threads().await.map_err(|e| e.to_string())
     } else {
         search_threads(query).await.map_err(|e| e.to_string())
+    }
+}
+
+#[component]
+pub fn ThreadList(
+    current_thread_id: ReadSignal<String>,
+    #[prop(into)] set_current_thread_id: Callback<String>,
+    #[prop(optional)] set_search_term: Option<WriteSignal<String>>,
+    #[prop(optional)] set_search_action: Option<WriteSignal<bool>>,
+) -> impl IntoView {
+    let client: QueryClient = expect_context();
+    let (search_query, set_search_query) = signal(String::new());
+    let (is_search_focused, set_is_search_focused) = signal(false);
+
+    // Node ref for the search input
+    let search_input_ref = NodeRef::<leptos::html::Input>::new();
+
+    let threads_resource = client.resource(get_threads_query, || ());
+    let search_resource = client.resource(search_threads_query, move || search_query.get());
+
+    let handle_search = move |ev: Event| {
+        let query = event_target_value(&ev);
+        set_search_query.set(query.clone());
+        
+        if let Some(set_term) = set_search_term {
+            set_term.set(query);
+        }
+    };
+
+    let handle_search_keydown = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() == "Enter" {
+            ev.prevent_default();
+            let query = search_query.get();
+            
+            if !query.is_empty() {
+                if let Some(set_term) = set_search_term {
+                    set_term.set(query.clone());
+                }
+                
+                if let Some(Ok(threads)) = search_resource.get() {
+                    if let Some(first_thread) = threads.first() {
+                        set_current_thread_id.run(first_thread.id.clone());
+                        
+                        if let Some(set_action) = set_search_action {
+                            set_timeout(
+                                move || {
+                                    set_action.set(true);
+                                    set_timeout(
+                                        move || set_action.set(false),
+                                        std::time::Duration::from_millis(100)
+                                    );
+                                },
+                                std::time::Duration::from_millis(50)
+                            );
+                        }
+                    }
+                }
+            }
+        } else if ev.key() == "Escape" {
+            set_search_query.set(String::new());
+            if let Some(set_term) = set_search_term {
+                set_term.set(String::new());
+            }
+            if let Some(input) = search_input_ref.get() {
+                let _ = input.blur();
+            }
+        }
+    };
+
+    let handle_focus = move |_| {
+        set_is_search_focused.set(true);
+    };
+
+    let handle_blur = move |_| {
+        set_is_search_focused.set(false);
+    };
+
+    // Global keyboard listener - only on client side
+    cfg_if! {
+        if #[cfg(feature = "hydrate")] {
+            use wasm_bindgen::{closure::Closure, JsCast};
+            use web_sys::HtmlInputElement;
+            
+            Effect::new(move |_| {
+                let handle_global_keydown = {
+                    let search_input_ref = search_input_ref.clone();
+                    Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+                        // Check for Cmd+K (Mac) or Ctrl+K (Windows/Linux)
+                        if event.key() == "k" && (event.meta_key() || event.ctrl_key()) {
+                            event.prevent_default();
+                            
+                            if let Some(input) = search_input_ref.get() {
+                                let input_element = input.unchecked_ref::<HtmlInputElement>();
+                                
+                                // Check if the input is currently focused
+                                if let Some(active_element) = web_sys::window()
+                                    .and_then(|w| w.document())
+                                    .and_then(|d| d.active_element())
+                                {
+                                    if active_element == input_element.clone().into() {
+                                        // Input is focused, blur it (toggle off)
+                                        let _ = input_element.blur();
+                                    } else {
+                                        // Input is not focused, focus it (toggle on)
+                                        let _ = input_element.focus();
+                                        let _ = input_element.select(); // Select all text for easy replacement
+                                    }
+                                } else {
+                                    // No active element, focus the input
+                                    let _ = input_element.focus();
+                                    let _ = input_element.select();
+                                }
+                            }
+                        }
+                    }) as Box<dyn FnMut(web_sys::KeyboardEvent)>)
+                };
+
+                if let Some(window) = web_sys::window() {
+                    if let Some(document) = window.document() {
+                        let _ = document.add_event_listener_with_callback(
+                            "keydown",
+                            handle_global_keydown.as_ref().unchecked_ref()
+                        );
+                    }
+                }
+
+                handle_global_keydown.forget();
+            });
+        }
+    }
+
+    let delete_thread_action = Action::new(move |thread_id: &String| {
+        let thread_id = thread_id.clone();
+        let current_id = current_thread_id.get_untracked(); 
+        async move {
+            match delete_thread(thread_id.clone()).await {
+                Ok(_) => {
+                    let client: QueryClient = expect_context();
+                    client.invalidate_query(get_threads_query, ());
+                    client.invalidate_query(search_threads_query, search_query.get_untracked());
+
+                    if current_id == thread_id {
+                        match get_threads().await {
+                            Ok(updated_threads) => {
+                                if let Some(next_thread) = updated_threads.first() {
+                                    set_current_thread_id.run(next_thread.id.clone());
+                                } else {
+                                    log::info!("no threads left");
+                                    set_current_thread_id.run(String::new());
+                                }
+                            }
+                            Err(e) => {
+                                error!("failed to fetch updated threads: {e:?}");
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("failed to delete thread: {e:?}");
+                }
+            }
+        }
+    });
+
+    let current_threads = move || {
+        if search_query.get().is_empty() {
+            threads_resource.get()
+        } else {
+            search_resource.get()
+        }
+    };
+
+    // Platform detection - only on client side
+    let get_hotkey_text = move || {
+        cfg_if! {
+            if #[cfg(feature = "hydrate")] {
+                web_sys::window()
+                    .and_then(|w| w.navigator().user_agent().ok())
+                    .map(|ua| if ua.to_lowercase().contains("mac") { "⌘K" } else { "Ctrl+K" })
+                    .unwrap_or("Ctrl+K")
+            } else {
+                "Ctrl+K" // Default for SSR
+            }
+        }
+    };
+
+    view! {
+        <div class="thread-list-container flex flex-col h-full">
+            <div class="flex-shrink-0">
+                <div class="relative flex items-center w-full">
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        class="h-5 w-5 absolute left-3 text-gray-400 dark:text-teal-500"
+                        viewBox="0 1 20 20"
+                        fill="currentColor"
+                    >
+                        <path
+                            fill-rule="evenodd"
+                            d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
+                            clip-rule="evenodd"
+                        ></path>
+                    </svg>
+
+                    <input
+                        node_ref=search_input_ref
+                        type="text"
+                        placeholder="grep your threads"
+                        on:input=handle_search
+                        on:keydown=handle_search_keydown
+                        on:focus=handle_focus
+                        on:blur=handle_blur
+                        prop:value=search_query
+                        class=move || {
+                            format!(
+                                "grep-box w-full pl-10 pr-16 p-2 mb-2 bg-gray-100 dark:bg-teal-800 text-teal-600 dark:text-mint-400
+                            border-0 transition duration-200 ease-in-out {}",
+                                if is_search_focused.get() {
+                                    "border-teal-500 dark:border-mint-300 ring-2 ring-teal-500/20 dark:ring-mint-300/20 shadow-md"
+                                } else {
+                                    "border-gray-300 dark:border-teal-600 focus:border-teal-500 dark:focus:border-mint-300 focus:outline-none focus:ring-2 focus:ring-teal-500/20 dark:focus:ring-mint-300/20"
+                                },
+                            )
+                        }
+                    />
+
+                    <div class="absolute right-3 flex items-center">
+                        <span class=move || {
+                            format!(
+                                "text-xs font-mono px-1.5 py-0.5 rounded border transition-colors duration-200 {}",
+                                if is_search_focused.get() {
+                                    "text-teal-600 dark:text-mint-300 bg-teal-100 dark:bg-teal-600 border-teal-300 dark:border-mint-400"
+                                } else {
+                                    "text-gray-400 dark:text-teal-500 bg-gray-200 dark:bg-teal-700 border-gray-300 dark:border-teal-600"
+                                },
+                            )
+                        }>{get_hotkey_text}</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto">
+                <Transition fallback=move || {
+                    view! {
+                        <div class="w-full">
+                            <p class="text-gray-500 dark:text-gray-400 text-sm">
+                                "Loading threads..."
+                            </p>
+                        </div>
+                    }
+                }>
+                    {move || {
+                        match current_threads() {
+                            Some(Ok(thread_list)) => {
+                                if thread_list.is_empty() {
+                                    view! {
+                                        <div class="w-full">
+                                            <p class="text-gray-500 dark:text-gray-400 text-sm">
+                                                "No threads found"
+                                            </p>
+                                        </div>
+                                    }
+                                        .into_any()
+                                } else {
+                                    let tree_nodes = build_thread_tree(thread_list);
+                                    view! {
+                                        <For
+                                            each=move || tree_nodes.clone()
+                                            key=|root_node| root_node.thread.id.clone()
+                                            children=move |root_node| {
+                                                view! {
+                                                    <ThreadTreeNode
+                                                        node=root_node
+                                                        current_thread_id=current_thread_id
+                                                        set_current_thread_id=set_current_thread_id
+                                                        delete_action=delete_thread_action
+                                                        depth=0
+                                                    />
+                                                }
+                                            }
+                                        />
+                                    }
+                                        .into_any()
+                                }
+                            }
+                            Some(Err(e)) => {
+                                view! {
+                                    <div class="w-full">
+                                        <div class="text-red-500 text-sm">
+                                            "Error loading threads: " {e}
+                                        </div>
+                                    </div>
+                                }
+                                    .into_any()
+                            }
+                            None => view! { <div></div> }.into_any(),
+                        }
+                    }}
+
+                </Transition>
+            </div>
+
+            <div class="flex-shrink-0">
+                <UserInfo/>
+            </div>
+        </div>
     }
 }
 
@@ -97,8 +403,8 @@ fn ThreadTreeNode(
             "branch".to_string()
         } else {
             // For main threads, show truncated thread ID
-            if thread.id.len() > 8 {
-                format!("{}...", &thread.id[..8])
+            if thread.id.len() > 24 {
+                format!("{}...", &thread.id[..24])
             } else {
                 thread.id.clone()
             }
@@ -412,161 +718,6 @@ fn UserInfo() -> impl IntoView {
     }
 }
 
-#[component]
-pub fn ThreadList(
-    current_thread_id: ReadSignal<String>,
-    #[prop(into)] set_current_thread_id: Callback<String>,
-) -> impl IntoView {
-    let client: QueryClient = expect_context();
-    let (search_query, set_search_query) = signal(String::new());
-
-    let threads_resource = client.resource(get_threads_query, || ());
-    
-    let search_resource = client.resource(search_threads_query, move || search_query.get());
-
-    let handle_search = move |ev: Event| {
-        let query = event_target_value(&ev);
-        set_search_query.set(query);
-    };
-
-    let delete_thread_action = Action::new(move |thread_id: &String| {
-        let thread_id = thread_id.clone();
-        let current_id = current_thread_id.get_untracked(); 
-        async move {
-            match delete_thread(thread_id.clone()).await {
-                Ok(_) => {
-                    let client: QueryClient = expect_context();
-                    client.invalidate_query(get_threads_query, ());
-                    client.invalidate_query(search_threads_query, search_query.get_untracked());
-
-                    if current_id == thread_id {
-                        // Get fresh threads to find next one
-                        match get_threads().await {
-                            Ok(updated_threads) => {
-                                if let Some(next_thread) = updated_threads.first() {
-                                    set_current_thread_id.run(next_thread.id.clone());
-                                } else {
-                                    log::info!("no threads left");
-                                    set_current_thread_id.run(String::new());
-                                }
-                            }
-                            Err(e) => {
-                                error!("failed to fetch updated threads: {e:?}");
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("failed to delete thread: {e:?}");
-                }
-            }
-        }
-    });
-
-    let current_threads = move || {
-        if search_query.get().is_empty() {
-            threads_resource.get()
-        } else {
-            search_resource.get()
-        }
-    };
-
-    view! {
-        <div class="thread-list-container flex flex-col h-full">
-            <div class="flex-shrink-0">
-                <div class="relative flex items-center w-full">
-                    <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        class="h-5 w-5 absolute right-3 text-gray-400 dark:text-teal-500"
-                        viewBox="0 1 20 20"
-                        fill="currentColor"
-                    >
-                        <path
-                            fill-rule="evenodd"
-                            d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
-                            clip-rule="evenodd"
-                        ></path>
-                    </svg>
-                    <input
-                        type="text"
-                        placeholder="grep your threads"
-                        on:input=handle_search
-                        class="grep-box w-full pr-10 p-2 mb-2 bg-gray-100 dark:bg-teal-800 text-teal-600 dark:text-mint-400
-                        border-0 border-gray-300 dark:border-teal-600 focus:border-teal-500 dark:focus:border-mint-300
-                        focus:outline-none transition duration-0 ease-in-out"
-                    />
-                </div>
-            </div>
-
-            <div class="flex-1 overflow-y-auto">
-                <Transition fallback=move || {
-                    view! {
-                        <div class="w-full">
-                            <p class="text-gray-500 dark:text-gray-400 text-sm">
-                                "Loading threads..."
-                            </p>
-                        </div>
-                    }
-                }>
-                    {move || {
-                        match current_threads() {
-                            Some(Ok(thread_list)) => {
-                                if thread_list.is_empty() {
-                                    view! {
-                                        <div class="w-full">
-                                            <p class="text-gray-500 dark:text-gray-400 text-sm">
-                                                "No threads found"
-                                            </p>
-                                        </div>
-                                    }
-                                        .into_any()
-                                } else {
-                                    let tree_nodes = build_thread_tree(thread_list);
-                                    view! {
-                                        <For
-                                            each=move || tree_nodes.clone()
-                                            key=|root_node| root_node.thread.id.clone()
-                                            children=move |root_node| {
-                                                view! {
-                                                    <ThreadTreeNode
-                                                        node=root_node
-                                                        current_thread_id=current_thread_id
-                                                        set_current_thread_id=set_current_thread_id
-                                                        delete_action=delete_thread_action
-                                                        depth=0
-                                                    />
-                                                }
-                                            }
-                                        />
-                                    }
-                                        .into_any()
-                                }
-                            }
-                            Some(Err(e)) => {
-                                view! {
-                                    <div class="w-full">
-                                        <div class="text-red-500 text-sm">
-                                            "Error loading threads: " {e}
-                                        </div>
-                                    </div>
-                                }
-                                    .into_any()
-                            }
-                            None => view! { <div></div> }.into_any(),
-                        }
-                    }}
-
-                </Transition>
-            </div>
-
-            <div class="flex-shrink-0">
-                <UserInfo/>
-            </div>
-        </div>
-    }
-}
-
-
 #[server(SearchThreads, "/api")]
 pub async fn search_threads(query: String) -> Result<Vec<ThreadView>, ServerFnError> {
     use diesel::prelude::*;
@@ -626,6 +777,7 @@ pub async fn search_threads(query: String) -> Result<Vec<ThreadView>, ServerFnEr
         )
         .select(threads::all_columns)
         .distinct()
+        .order(threads::created_at.desc())
         .load::<Thread>(&mut conn)
         .await
         .map_err(SearchError::Database)

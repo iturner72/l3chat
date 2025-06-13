@@ -46,7 +46,7 @@ pub fn App() -> impl IntoView {
 
     view! {
         <Stylesheet id="leptos" href="/pkg/l3chat.css"/>
-        <Title text="Welcome to l3chat"/>
+        <Title text="l3chat"/>
         <AuthProvider>
             <Router>
                 <main>

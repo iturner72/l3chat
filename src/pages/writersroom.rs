@@ -22,7 +22,8 @@ pub fn WritersRoom() -> impl IntoView {
     let (toast_visible, set_toast_visible) = signal(false);
     let (toast_message, set_toast_message) = signal(String::new());
     let (message_refetch_trigger, set_message_refetch_trigger) = signal(0);
-    
+    let (search_term, set_search_term) = signal(String::new());
+    let (search_action, set_search_action) = signal(false);
     let (pending_messages, set_pending_messages) = signal(Vec::<PendingMessage>::new());
 
     let create_thread_action = Action::new(move |_: &()| {
@@ -37,6 +38,8 @@ pub fn WritersRoom() -> impl IntoView {
                     
                     set_message_refetch_trigger.update(|n| *n += 1);
                     set_pending_messages.update(|msgs| msgs.clear());
+                    
+                    set_search_term.set(String::new());
                     
                     set_timeout(
                         move || set_toast_visible(false),
@@ -136,6 +139,55 @@ pub fn WritersRoom() -> impl IntoView {
                         >
                             <Icon icon=icondata::FaPenFancySolid width="16" height="16"/>
                         </a>
+
+                        {move || {
+                            let term = search_term.get();
+                            if !term.is_empty() {
+                                view! {
+                                    <div class="flex items-center px-3 py-2 bg-mint-200 dark:bg-mint-800 text-mint-800 dark:text-mint-200 rounded text-xs">
+                                        <span class="mr-2">"🔍 \"" {term.clone()} "\""</span>
+                                        <button
+                                            class="text-mint-600 dark:text-mint-400 hover:text-mint-800 dark:hover:text-mint-200"
+                                            on:click=move |_| set_search_term.set(String::new())
+                                        >
+                                            "×"
+                                        </button>
+                                        <span class="ml-2 text-xs text-mint-600 dark:text-mint-400">
+                                            {move || {
+                                                cfg_if::cfg_if! {
+                                                    if #[cfg(feature = "hydrate")] { web_sys::window()
+                                                    .and_then(| w | w.navigator().user_agent().ok()).map(| ua |
+                                                    if ua.to_lowercase().contains("mac") {
+                                                    "⌘K to focus search" } else { "Ctrl+K to focus search" })
+                                                    .unwrap_or("Ctrl+K to focus search") } else {
+                                                    "Ctrl+K to focus search" }
+                                                }
+                                            }}
+
+                                        </span>
+                                    </div>
+                                }
+                                    .into_any()
+                            } else {
+                                view! {
+                                    <div class="flex items-center px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
+                                        {move || {
+                                            cfg_if::cfg_if! {
+                                                if #[cfg(feature = "hydrate")] { web_sys::window()
+                                                .and_then(| w | w.navigator().user_agent().ok()).map(| ua |
+                                                if ua.to_lowercase().contains("mac") {
+                                                "⌘K to search threads" } else { "Ctrl+K to search threads"
+                                                }).unwrap_or("Ctrl+K to search threads") } else {
+                                                "Ctrl+K to search threads" }
+                                            }
+                                        }}
+
+                                    </div>
+                                }
+                                    .into_any()
+                            }
+                        }}
+
                     </div>
 
                     <AuthNav/>
@@ -155,6 +207,8 @@ pub fn WritersRoom() -> impl IntoView {
                         <ThreadList
                             current_thread_id=thread_id
                             set_current_thread_id=thread_switch_callback
+                            set_search_term=set_search_term
+                            set_search_action=set_search_action
                         />
                     </div>
                 </div>
@@ -166,6 +220,8 @@ pub fn WritersRoom() -> impl IntoView {
                             set_current_thread_id=set_thread_id
                             refetch_trigger=message_refetch_trigger
                             pending_messages=pending_messages
+                            search_term=search_term
+                            search_action=search_action
                         />
                     </div>
 

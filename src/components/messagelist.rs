@@ -2,11 +2,12 @@ use leptos::prelude::*;
 use leptos_fetch::QueryClient;
 use leptos_icons::Icon;
 use chrono::Utc;
+use std::borrow::Cow;
+use wasm_bindgen::JsCast;
 
 use crate::models::conversations::{MessageView, DisplayMessage, PendingMessage, BranchInfo};
 use crate::components::markdown::MarkdownRenderer;
 
-// Simple query function for getting messages
 async fn get_messages_query(thread_id: String) -> Result<Vec<MessageView>, String> {
     if thread_id.is_empty() {
         Ok(Vec::new())
@@ -15,12 +16,86 @@ async fn get_messages_query(thread_id: String) -> Result<Vec<MessageView>, Strin
     }
 }
 
-// Simple query function for getting thread branches
 async fn get_branches_query(thread_id: String) -> Result<Vec<BranchInfo>, String> {
     if thread_id.is_empty() {
         Ok(Vec::new())
     } else {
         get_thread_branches(thread_id).await.map_err(|e| e.to_string())
+    }
+}
+
+fn get_highlighted_segments(text: &str, search_term: &str) -> Vec<(String, bool)> {
+    if search_term.is_empty() {
+        return vec![(text.to_string(), false)];
+    }
+
+    let search_term = search_term.to_lowercase();
+    let mut result = Vec::new();
+    let mut last_index = 0;
+    let text_lower = text.to_lowercase();
+
+    while let Some(start_idx) = text_lower[last_index..].find(&search_term) {
+        let absolute_start = last_index + start_idx;
+        let absolute_end = absolute_start + search_term.len();
+
+        // Add non-matching segment if there is one
+        if absolute_start > last_index {
+            result.push((text[last_index..absolute_start].to_string(), false));
+        }
+
+        // Add matching segment (using original case from text)
+        result.push((text[absolute_start..absolute_end].to_string(), true));
+
+        last_index = absolute_end;
+    }
+
+    // Add remaining text if any
+    if last_index < text.len() {
+        result.push((text[last_index..].to_string(), false));
+    }
+
+    result
+}
+
+fn message_contains_search_term(message: &DisplayMessage, search_term: &str) -> bool {
+    if search_term.is_empty() {
+        return false;
+    }
+    message.content().to_lowercase().contains(&search_term.to_lowercase())
+}
+
+#[component]
+fn HighlightedText<'a>(
+    #[prop(into)] text: Cow<'a, str>,
+    #[prop(into)] search_term: String,
+    #[prop(optional)] class: &'static str,
+    #[prop(optional)] is_current_match: bool,
+) -> impl IntoView {
+    let segments = get_highlighted_segments(&text, &search_term);
+
+    view! {
+        <span class=class>
+            {segments
+                .into_iter()
+                .map(|(text, is_highlight)| {
+                    if is_highlight {
+                        view! {
+                            <mark class=format!(
+                                "rounded px-0.5 {}",
+                                if is_current_match {
+                                    "bg-mint-300 dark:bg-mint-800 text-seafoam-900 dark:text-seafoam-100 ring-2 ring-mint-500 dark:ring-mint-400"
+                                } else {
+                                    "bg-mint-400 dark:bg-mint-900 text-seafoam-900 dark:text-seafoam-200"
+                                },
+                            )>{text}</mark>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <span>{text}</span> }.into_any()
+                    }
+                })
+                .collect_view()}
+        </span>
     }
 }
 
@@ -30,23 +105,26 @@ pub fn MessageList(
     set_current_thread_id: WriteSignal<String>,
     #[prop(optional)] refetch_trigger: Option<ReadSignal<i32>>,
     #[prop(optional)] pending_messages: Option<ReadSignal<Vec<PendingMessage>>>,
+    #[prop(optional)] search_term: Option<ReadSignal<String>>,
+    #[prop(optional)] search_action: Option<ReadSignal<bool>>,
 ) -> impl IntoView {
     let client: QueryClient = expect_context();
     
-    // Create a reactive key that depends on both thread_id and refetch trigger
+    // Search navigation state
+    let (current_match_index, set_current_match_index) = signal(0);
+    let (total_matches, set_total_matches) = signal(0);
+    
     let _query_key = move || {
         let thread = current_thread_id.get();
         let trigger = refetch_trigger.map(|t| t.get()).unwrap_or(0);
         (thread, trigger)
     };
 
-    // Use leptos-fetch resource for messages
     let messages_resource = client.resource(
         get_messages_query, 
         move || current_thread_id.get()
     );
 
-    // Use leptos-fetch resource for branches
     let branches_resource = client.resource(
         get_branches_query,
         move || current_thread_id.get()
@@ -55,7 +133,7 @@ pub fn MessageList(
     // Manually invalidate when refetch trigger changes
     Effect::new(move |_| {
         if let Some(trigger) = refetch_trigger {
-            trigger.get(); // Subscribe to changes
+            trigger.get();
             let thread_id = current_thread_id.get();
             client.invalidate_query(get_messages_query, &thread_id);
             client.invalidate_query(get_branches_query, &thread_id);
@@ -96,6 +174,176 @@ pub fn MessageList(
         combined
     };
 
+    // Get messages with matches and update total count
+    let messages_with_matches = move || -> Vec<(DisplayMessage, bool, usize, bool)> {
+        let messages = combined_messages();
+        let term = search_term.map(|s| s.get()).unwrap_or_default();
+        let current_idx = current_match_index.get();
+        
+        let mut match_index = 0;
+        let result: Vec<(DisplayMessage, bool, usize, bool)> = messages.into_iter()
+            .map(|message| {
+                let has_match = message_contains_search_term(&message, &term);
+                let (this_match_index, is_current_match) = if has_match {
+                    let idx = match_index;
+                    let is_current = idx == current_idx;
+                    match_index += 1;
+                    (idx, is_current)
+                } else {
+                    (0, false)
+                };
+                (message, has_match, this_match_index, is_current_match)
+            })
+            .collect();
+            
+        set_total_matches.set(match_index);
+        result
+    };
+
+    let scroll_to_message = move |message_id: String| {
+        if let Some(window) = web_sys::window() {
+            if let Some(document) = window.document() {
+                if let Some(element) = document.get_element_by_id(&format!("message-{}", message_id)) {
+                    element.scroll_into_view();
+                }
+            }
+        }
+    };
+
+    let navigate_to_match = move |index: usize| {
+        let messages_with_search = messages_with_matches();
+        let matching_messages: Vec<_> = messages_with_search.into_iter()
+            .filter(|(_, has_match, _, _)| *has_match)
+            .collect();
+            
+        if let Some((message, _, _, _)) = matching_messages.get(index) {
+            scroll_to_message(message.id());
+        }
+    };
+
+    // Handle search action trigger (when Enter is pressed in ThreadList OR when thread changes with active search)
+    Effect::new(move |_| {
+        if let Some(action_signal) = search_action {
+            action_signal.get(); // Subscribe to changes
+            if action_signal.get() {
+                // Navigate to first match
+                set_current_match_index.set(0);
+                navigate_to_match(0);
+            }
+        }
+    });
+
+    // Debug effect to track search term changes
+    Effect::new(move |_| {
+        let term = search_term.map(|s| s.get()).unwrap_or_default();
+        let thread = current_thread_id.get();
+        log::info!("MessageList: search_term='{}', thread_id='{}'", term, thread);
+    });
+
+    // Auto-apply search when thread changes and there's an active search term
+    Effect::new(move |_| {
+        let thread = current_thread_id.get();
+        let term = search_term.map(|s| s.get()).unwrap_or_default();
+        
+        log::info!("Thread change effect: thread='{}', term='{}'", thread, term);
+        
+        if !thread.is_empty() && !term.is_empty() {
+            // Reset match index when switching threads
+            set_current_match_index.set(0);
+            
+            // Small delay to let messages load, then navigate to first match
+            set_timeout(
+                move || {
+                    log::info!("Navigating to first match after thread switch");
+                    navigate_to_match(0);
+                },
+                std::time::Duration::from_millis(500) // Increased delay to ensure messages are loaded
+            );
+        }
+    });
+
+    // Also trigger search navigation when messages finish loading
+    Effect::new(move |_| {
+        if let Some(Ok(_)) = messages_resource.get() {
+            let term = search_term.map(|s| s.get()).unwrap_or_default();
+            let matches = total_matches.get();
+            
+            if !term.is_empty() && matches > 0 && current_match_index.get() == 0 {
+                // Small delay to ensure DOM is updated
+                set_timeout(
+                    move || {
+                        navigate_to_match(0);
+                    },
+                    std::time::Duration::from_millis(100)
+                );
+            }
+        }
+    });
+
+    // Keyboard navigation
+    Effect::new(move |_| {
+        use wasm_bindgen::closure::Closure;
+        use web_sys::KeyboardEvent;
+        
+        let handle_keydown = {
+            let navigate_to_match = navigate_to_match.clone();
+            Closure::wrap(Box::new(move |event: KeyboardEvent| {
+                let term = search_term.map(|s| s.get()).unwrap_or_default();
+                if term.is_empty() || total_matches.get() == 0 {
+                    return;
+                }
+
+                // Cmd+N (or Win+J) - Next match
+                if event.key() == "j" && (event.meta_key() || event.ctrl_key()) {
+                    event.prevent_default();
+                    let new_index = (current_match_index.get() + 1) % total_matches.get();
+                    set_current_match_index.set(new_index);
+                    navigate_to_match(new_index);
+                }
+                // Cmd+P (or Win+P) - Previous match
+                else if event.key() == "p" && (event.meta_key() || event.ctrl_key()) {
+                    event.prevent_default();
+                    let new_index = if current_match_index.get() == 0 {
+                        total_matches.get().saturating_sub(1)
+                    } else {
+                        current_match_index.get() - 1
+                    };
+                    set_current_match_index.set(new_index);
+                    navigate_to_match(new_index);
+                }
+                // F3 - Next match (fallback)
+                else if event.key() == "F3" && !event.shift_key() {
+                    event.prevent_default();
+                    let new_index = (current_match_index.get() + 1) % total_matches.get();
+                    set_current_match_index.set(new_index);
+                    navigate_to_match(new_index);
+                }
+                // Shift+F3 - Previous match (fallback)
+                else if event.key() == "F3" && event.shift_key() {
+                    event.prevent_default();
+                    let new_index = if current_match_index.get() == 0 {
+                        total_matches.get().saturating_sub(1)
+                    } else {
+                        current_match_index.get() - 1
+                    };
+                    set_current_match_index.set(new_index);
+                    navigate_to_match(new_index);
+                }
+            }) as Box<dyn FnMut(KeyboardEvent)>)
+        };
+
+        if let Some(window) = web_sys::window() {
+            if let Some(document) = window.document() {
+                let _ = document.add_event_listener_with_callback(
+                    "keydown",
+                    handle_keydown.as_ref().unchecked_ref()
+                );
+            }
+        }
+
+        handle_keydown.forget();
+    });
+
     let create_branch_action = Action::new(move |(message_id,): &(i32,)| {
         let message_id = *message_id;
         let thread_id = current_thread_id.get();
@@ -125,6 +373,65 @@ pub fn MessageList(
     view! {
         <div class="h-full flex flex-col w-full overflow-hidden">
             <div class="flex-shrink-0 mb-4">
+                {move || {
+                    let term = search_term.map(|s| s.get()).unwrap_or_default();
+                    let matches = total_matches.get();
+                    if !term.is_empty() && matches > 0 {
+                        view! {
+                            <div class="mb-3 p-3 bg-mint-100 dark:bg-mint-900 rounded-sm border border-mint-300 dark:border-mint-700">
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center space-x-2">
+                                        <span class="text-sm font-medium text-mint-800 dark:text-mint-200">
+                                            {format!("\"{}\" - {} matches", term, matches)}
+                                        </span>
+                                        <span class="text-xs text-mint-600 dark:text-mint-400">
+                                            {format!("({}/{})", current_match_index.get() + 1, matches)}
+                                        </span>
+                                    </div>
+                                    <div class="flex items-center space-x-1">
+                                        <button
+                                            class="px-2 py-1 text-xs bg-mint-200 dark:bg-mint-800 hover:bg-mint-300 dark:hover:bg-mint-700 
+                                            text-mint-800 dark:text-mint-200 rounded transition-colors"
+                                            on:click=move |_| {
+                                                let new_index = if current_match_index.get() == 0 {
+                                                    total_matches.get().saturating_sub(1)
+                                                } else {
+                                                    current_match_index.get() - 1
+                                                };
+                                                set_current_match_index.set(new_index);
+                                                navigate_to_match(new_index);
+                                            }
+
+                                            disabled=move || total_matches.get() <= 1
+                                        >
+                                            "↑"
+                                        </button>
+                                        <button
+                                            class="px-2 py-1 text-xs bg-mint-200 dark:bg-mint-800 hover:bg-mint-300 dark:hover:bg-mint-700 
+                                            text-mint-800 dark:text-mint-200 rounded transition-colors"
+                                            on:click=move |_| {
+                                                let new_index = (current_match_index.get() + 1)
+                                                    % total_matches.get();
+                                                set_current_match_index.set(new_index);
+                                                navigate_to_match(new_index);
+                                            }
+
+                                            disabled=move || total_matches.get() <= 1
+                                        >
+                                            "↓"
+                                        </button>
+                                        <span class="text-xs text-mint-600 dark:text-mint-400 ml-2">
+                                            "⌘J/⌘P • F3/⇧F3"
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <div></div> }.into_any()
+                    }
+                }}
                 <Suspense fallback=move || {
                     view! {
                         <div class="animate-pulse bg-gray-300 dark:bg-teal-600 h-8 rounded-md"></div>
@@ -138,7 +445,7 @@ pub fn MessageList(
                                     Ok(branches) => {
                                         if !branches.is_empty() {
                                             view! {
-                                                <div class="p-3 bg-gray-200 dark:bg-teal-700 rounded-lg border border-gray-300 dark:border-teal-600">
+                                                <div class="p-3 bg-gray-200 dark:bg-teal-700 rounded-sm border border-gray-300 dark:border-teal-600">
                                                     <h4 class="text-sm font-medium text-gray-700 dark:text-gray-200 mb-3">
                                                         "Thread Branches:"
                                                     </h4>
@@ -194,6 +501,7 @@ pub fn MessageList(
 
                 </Suspense>
             </div>
+
             <div class="flex-1 overflow-y-auto overflow-x-hidden pr-2 min-w-0 w-full">
                 <Suspense fallback=move || {
                     view! {
@@ -205,8 +513,8 @@ pub fn MessageList(
                     }
                 }>
                     {move || {
-                        let messages = combined_messages();
-                        if messages.is_empty() {
+                        let messages_data = messages_with_matches();
+                        if messages_data.is_empty() {
                             view! {
                                 <div class="flex items-center justify-center h-32">
                                     <div class="text-center text-gray-500 dark:text-gray-400">
@@ -219,52 +527,104 @@ pub fn MessageList(
                             }
                                 .into_any()
                         } else {
+                            let highlight_term = search_term.map(|s| s.get()).unwrap_or_default();
                             view! {
                                 <div class="space-y-4 w-full overflow-hidden">
                                     <For
-                                        each=move || combined_messages()
-                                        key=|message| message.id()
-                                        children=move |message| {
+                                        each=move || messages_with_matches()
+                                        key=|(message, _, _, _)| message.id()
+                                        children=move |
+                                            (message, has_match, _match_index, is_current_match)|
+                                        {
                                             let is_user = message.is_user();
                                             let is_streaming = message.is_streaming();
+                                            let search_highlight_term = highlight_term.clone();
+                                            let message_id = message.id();
                                             view! {
-                                                <div class=format!(
-                                                    "flex w-full min-w-0 {}",
-                                                    if is_user { "justify-end" } else { "justify-start" },
-                                                )>
+                                                <div
+                                                    id=format!("message-{}", message_id)
+                                                    class=format!(
+                                                        "flex w-full min-w-0 {} {}",
+                                                        if is_user { "justify-end" } else { "justify-start" },
+                                                        if is_current_match {
+                                                            "ring-0 ring-mint-500 dark:ring-aqua-700 ring-opacity-100 rounded-sm shadow-lg"
+                                                        } else if has_match {
+                                                            "ring-0 ring-mint-600 dark:ring-aqua-800 ring-opacity-50 rounded-sm"
+                                                        } else {
+                                                            ""
+                                                        },
+                                                    )
+                                                >
+
                                                     <div class=format!(
-                                                        "max-w-[80%] min-w-0 rounded-lg p-4 shadow-sm overflow-hidden {} {}",
+                                                        "max-w-[80%] min-w-0 rounded-lg p-4 shadow-sm overflow-hidden {} {} {}",
                                                         if is_user {
                                                             "bg-seafoam-500 text-white"
                                                         } else {
                                                             "bg-white dark:bg-teal-700 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-teal-600"
                                                         },
                                                         if is_streaming { "animate-pulse" } else { "" },
+                                                        if is_current_match {
+                                                            "ring-0 ring-mint-500 dark:ring-aqua-700 ring-inset"
+                                                        } else {
+                                                            ""
+                                                        },
                                                     )>
+
+                                                        {}
                                                         <div class="prose prose-sm w-full max-w-full overflow-hidden">
                                                             {if is_user {
                                                                 view! {
                                                                     <div class="whitespace-pre-wrap text-sm leading-relaxed text-white break-words w-full">
-                                                                        <p class="whitespace-pre-wrap text-sm leading-relaxed text-white break-words w-full">
-                                                                            {message.content().to_string()}
-                                                                        </p>
+                                                                        <HighlightedText
+                                                                            text=Cow::from(message.content().to_string())
+                                                                            search_term=search_highlight_term.clone()
+                                                                            class=if is_current_match {
+                                                                                "whitespace-pre-wrap text-sm leading-relaxed text-white break-words w-full bg-white/10 rounded px-1"
+                                                                            } else {
+                                                                                "whitespace-pre-wrap text-sm leading-relaxed text-white break-words w-full"
+                                                                            }
+                                                                        />
+
                                                                     </div>
                                                                 }
                                                                     .into_any()
                                                             } else {
                                                                 view! {
-                                                                    <div class="text-sm leading-relaxed text-left w-full max-w-full overflow-hidden">
-                                                                        <MarkdownRenderer
-                                                                            content=message.content().to_string()
-                                                                            class="text-left w-full max-w-full"
-                                                                        />
+                                                                    <div class=format!(
+                                                                        "text-sm leading-relaxed text-left w-full max-w-full overflow-hidden {}",
+                                                                        if is_current_match {
+                                                                            "bg-mint-50 dark:bg-mint-900/20 rounded p-2"
+                                                                        } else {
+                                                                            ""
+                                                                        },
+                                                                    )>
+                                                                        {if !search_highlight_term.is_empty() {
+                                                                            view! {
+                                                                                <HighlightedText
+                                                                                    text=Cow::from(message.content().to_string())
+                                                                                    search_term=search_highlight_term.clone()
+                                                                                    class="text-left w-full max-w-full whitespace-pre-wrap text-sm leading-relaxed break-words"
+                                                                                />
+                                                                            }
+                                                                                .into_any()
+                                                                        } else {
+                                                                            view! {
+                                                                                <MarkdownRenderer
+                                                                                    content=message.content().to_string()
+                                                                                    class="text-left w-full max-w-full"
+                                                                                />
+                                                                            }
+                                                                                .into_any()
+                                                                        }}
+
                                                                     </div>
                                                                 }
                                                                     .into_any()
                                                             }}
 
                                                         </div>
-
+                                                        {}
                                                         {move || {
                                                             if is_user && !is_streaming {
                                                                 if let Some(db_id) = message.db_id() {
