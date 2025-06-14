@@ -12,6 +12,8 @@ pub mod pages;
 #[cfg(feature = "ssr")]
 pub mod schema;
 pub mod server_fn;
+#[cfg(feature = "ssr")]
+pub mod services;
 pub mod state;
 pub mod supabase;
 pub mod types;

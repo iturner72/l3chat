@@ -301,6 +301,7 @@ pub async fn create_thread() -> Result<String, ServerFnError> {
         parent_thread_id: None,
         branch_point_message_id: None,
         branch_name: None,
+        title: None, 
     };
 
     diesel::insert_into(threads::table)

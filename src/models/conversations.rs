@@ -11,6 +11,7 @@ pub struct ThreadView {
     pub parent_thread_id: Option<String>,
     pub branch_point_message_id: Option<i32>,
     pub branch_name: Option<String>,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -137,7 +138,7 @@ cfg_if! { if #[cfg(feature = "ssr")] {
     use chrono::NaiveDateTime;
     use diesel::prelude::*;
 
-    #[derive(Debug, Serialize, Deserialize, Queryable, Identifiable, Insertable)]
+    #[derive(Debug, Serialize, Deserialize, Queryable, QueryableByName,  Identifiable, Insertable)]
     #[diesel(table_name = threads)]
     pub struct Thread {
         #[diesel(column_name = id)]
@@ -148,6 +149,7 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub parent_thread_id: Option<String>,
         pub branch_point_message_id: Option<i32>,
         pub branch_name: Option<String>,
+        pub title: Option<String>,
     }
 
     impl From<Thread> for ThreadView {
@@ -160,12 +162,13 @@ cfg_if! { if #[cfg(feature = "ssr")] {
                 parent_thread_id: thread.parent_thread_id,
                 branch_point_message_id: thread.branch_point_message_id,
                 branch_name: thread.branch_name,
+                title: thread.title,
             }
         }
     }
 
     // used for querying messages directly from the database
-    #[derive(Debug, Serialize, Deserialize, Queryable, Identifiable, Insertable, Associations, Default)]
+    #[derive(Debug, Serialize, Deserialize, Queryable, QueryableByName, Identifiable, Insertable, Associations, Default)]
     #[diesel(belongs_to(Thread, foreign_key = thread_id))]
     #[diesel(table_name = messages)]
     pub struct Message {
@@ -198,7 +201,7 @@ cfg_if! { if #[cfg(feature = "ssr")] {
     }
 
     // message data from the client ("new type" or "insert type" pattern)
-    #[derive(Debug, Insertable, Deserialize)]
+    #[derive(Debug, Insertable, Deserialize, QueryableByName)]
     #[diesel(table_name = messages)]
     pub struct NewMessage {
         pub thread_id: String,

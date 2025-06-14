@@ -30,6 +30,8 @@ pub fn ThreadList(
     let client: QueryClient = expect_context();
     let (search_query, set_search_query) = signal(String::new());
     let (is_search_focused, set_is_search_focused) = signal(false);
+    let (title_updates, _set_title_updates) = signal(std::collections::HashMap::<String, String>::new());
+    let (_sse_connected, _set_sse_connected) = signal(false);
 
     // Node ref for the search input
     let search_input_ref = NodeRef::<leptos::html::Input>::new();
@@ -164,7 +166,7 @@ pub fn ThreadList(
                                 if let Some(next_thread) = updated_threads.first() {
                                     set_current_thread_id.run(next_thread.id.clone());
                                 } else {
-                                    log::info!("no threads left");
+                                    log::debug!("no threads left");
                                     set_current_thread_id.run(String::new());
                                 }
                             }
@@ -203,6 +205,66 @@ pub fn ThreadList(
         }
     };
 
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "hydrate")] {
+            use leptos::task::spawn_local;
+            spawn_local(async move {
+                use std::rc::Rc;
+                use wasm_bindgen::closure::Closure;
+                use wasm_bindgen::JsCast;
+                use web_sys::{EventSource, MessageEvent, ErrorEvent};
+
+                let event_source = Rc::new(
+                    EventSource::new("/api/title-updates")
+                        .expect("Failed to connect to title updates")
+                );
+
+                let on_open = {
+                    Closure::wrap(Box::new(move |_: web_sys::Event| {
+                        _set_sse_connected.set(true);
+                    }) as Box<dyn FnMut(_)>)
+                };
+
+                let on_message = {
+                    Closure::wrap(Box::new(move |event: MessageEvent| {
+                        if let Some(data) = event.data().as_string() {
+                            if let Ok(update) = serde_json::from_str::<crate::types::TitleUpdate>(&data) {
+                                _set_title_updates.update(|updates| {
+                                    updates.insert(update.thread_id.clone(), update.title.clone());
+                                });
+                                
+                                if update.status == "completed" {
+                                    set_timeout(
+                                        move || {
+                                            client.invalidate_query(get_threads_query, ());
+                                        },
+                                        std::time::Duration::from_millis(500)
+                                    );
+                                }
+                            }
+                        }
+                    }) as Box<dyn FnMut(_)>)
+                };
+
+                let on_error = {
+                    Closure::wrap(Box::new(move |_: ErrorEvent| {
+                        _set_sse_connected.set(false);
+                    }) as Box<dyn FnMut(_)>)
+                };
+
+                event_source.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+                event_source.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+                event_source.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+
+                on_open.forget();
+                on_message.forget();
+                on_error.forget();
+            });
+        }
+    }
+    
+    log::debug!("SSE RenderEffect created successfully");
+
     view! {
         <div class="thread-list-container flex flex-col h-full">
             <div class="flex-shrink-0">
@@ -232,7 +294,7 @@ pub fn ThreadList(
                         class=move || {
                             format!(
                                 "grep-box w-full pl-10 pr-16 p-2 mb-2 bg-gray-100 dark:bg-teal-800 text-teal-600 dark:text-mint-400
-                            border-0 transition duration-200 ease-in-out {}",
+                            border-0 transition duration-0 ease-in-out {}",
                                 if is_search_focused.get() {
                                     "border-teal-500 dark:border-mint-300 ring-2 ring-teal-500/20 dark:ring-mint-300/20 shadow-md"
                                 } else {
@@ -245,7 +307,7 @@ pub fn ThreadList(
                     <div class="absolute right-3 flex items-center">
                         <span class=move || {
                             format!(
-                                "text-xs font-mono px-1.5 py-0.5 rounded border transition-colors duration-200 {}",
+                                "text-xs font-mono px-1.5 py-0.5 rounded border transition-colors duration-0 {}",
                                 if is_search_focused.get() {
                                     "text-teal-600 dark:text-mint-300 bg-teal-100 dark:bg-teal-600 border-teal-300 dark:border-mint-400"
                                 } else {
@@ -293,6 +355,7 @@ pub fn ThreadList(
                                                         set_current_thread_id=set_current_thread_id
                                                         delete_action=delete_thread_action
                                                         depth=0
+                                                        title_updates=title_updates
                                                     />
                                                 }
                                             }
@@ -333,6 +396,7 @@ fn ThreadTreeNode(
     delete_action: Action<String, ()>,
     depth: usize,
     #[prop(optional)] is_last_child: bool,
+    title_updates: ReadSignal<std::collections::HashMap<String, String>>,
 ) -> impl IntoView {
     let thread = node.thread.clone();
     let thread_id = thread.id.clone();
@@ -340,6 +404,7 @@ fn ThreadTreeNode(
     let thread_id_for_set = thread_id.clone();
     let thread_id_for_delete = thread_id.clone();
     let thread_for_display = thread.clone();
+    let thread_for_generation = thread.clone();
     let thread_for_styles = thread.clone();
     
     // Calculate indentation based on depth
@@ -363,7 +428,7 @@ fn ThreadTreeNode(
                         </div>
                     }.into_any(),
                     "border-seafoam-500 bg-seafoam-600 dark:bg-seafoam-700",
-                    "text-white group-hover:text-white",
+                    "ir text-sm text-white group-hover:text-white",
                 )
             } else {
                 (
@@ -373,7 +438,7 @@ fn ThreadTreeNode(
                         </div>
                     }.into_any(),
                     "border-gray-600 bg-gray-200 dark:bg-teal-700 hover:border-seafoam-600 hover:bg-gray-300 dark:hover:bg-teal-600",
-                    "text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-white",
+                    "ir text-sm text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-white",
                 )
             }
         } else {
@@ -382,34 +447,86 @@ fn ThreadTreeNode(
                 (
                     view! { <span></span> }.into_any(),
                     "border-teal-500 bg-teal-600 dark:bg-teal-700",
-                    "text-white group-hover:text-white",
+                    "ir text-sm text-white group-hover:text-white",
                 )
             } else {
                 (
                     view! { <span></span> }.into_any(),
                     "border-teal-700 bg-gray-300 dark:bg-teal-800 hover:border-teal-800 hover:bg-gray-400 dark:hover:bg-gray-700",
-                    "text-gray-700 group-hover:text-white dark:text-gray-100 dark:group-hover:text-white",
+                    "ir text-sm text-gray-700 group-hover:text-white dark:text-gray-100 dark:group-hover:text-white",
                 )
             }
         }
     };
 
-    let get_display_name = move |thread: &ThreadView| {
+    let display_name = Memo::new(move |_| {
+        let updates = title_updates.get();
+        let thread = &thread_for_display;
+        
+        log::debug!("Display name memo triggered for thread {}", thread.id);
+        log::debug!("Current title_updates in memo: {updates:?}");
+        
+        // Check for live updates FIRST, regardless of thread type
+        if let Some(live_title) = updates.get(&thread.id) {
+            log::debug!("Thread {:?} using live title: '{:?}'", thread.id, live_title);
+            return live_title.clone();
+        }
+        
+        // Then check for branch naming
         if let Some(branch_name) = &thread.branch_name {
-            // For branches, just show the branch name
-            format!("branch {}", branch_name)
+            let result = format!("branch {branch_name}");
+            log::debug!("Thread {} display name (branch): {}", thread.id, result);
+            result
         } else if thread.parent_thread_id.is_some() {
-            // Fallback for branches without explicit names
-            "branch".to_string()
+            let result = "branch".to_string();
+            log::debug!("Thread {} display name (generic branch): {}", thread.id, result);
+            result
         } else {
-            // For main threads, show truncated thread ID
-            if thread.id.len() > 24 {
-                format!("{}...", &thread.id[..24])
+            // Root thread logic
+            if let Some(title) = &thread.title {
+                if !title.trim().is_empty() {
+                    log::debug!("Thread {} using database title: '{}'", thread.id, title);
+                    title.clone()
+                } else {
+                    // Title is empty, show truncated ID
+                    let result = if thread.id.len() > 24 {
+                        format!("{}...", &thread.id[..24])
+                    } else {
+                        thread.id.clone()
+                    };
+                    log::debug!("Thread {} using truncated ID (empty title): '{}'", thread.id, result);
+                    result
+                }
             } else {
-                thread.id.clone()
+                // No title - just show truncated thread ID
+                let result = if thread.id.len() > 24 {
+                    format!("{}...", &thread.id[..24])
+                } else {
+                    thread.id.clone()
+                };
+                log::debug!("Thread {} using truncated ID (no title): '{}'", thread.id, result);
+                result
             }
         }
-    };
+    });
+
+    let is_generating_title = Memo::new(move |_| {
+        let updates = title_updates.get();
+        let thread_id = &thread_for_generation.id;
+        
+        log::debug!("Checking if thread {thread_id} is generating title");
+        
+        let x = if let Some(title) = updates.get(thread_id) {
+            let is_generating = title.contains("Generating") || title.contains("...");
+            log::debug!("Current title: '{title:?}', is_generating: {is_generating:?}");
+            is_generating
+        } else {
+            log::debug!("No title update found for thread");
+            false
+        };
+
+        x 
+    });
 
     let has_children = !node.children.is_empty();
     let children_for_each = node.children.clone();
@@ -449,25 +566,61 @@ fn ThreadTreeNode(
                     {move || {
                         let (icon, button_class, text_class) = get_styles();
                         let thread_id_for_click = thread_id_for_set.clone();
+                        let is_generating = is_generating_title.get();
                         view! {
                             <button
                                 class=format!(
-                                    "thread-item w-full p-2 border-0 {} rounded-md transition duration-0 ease-in-out group text-sm relative",
+                                    "thread-item w-full p-2 border-0 {} rounded-md transition duration-0 ease-in-out group text-sm relative {}",
                                     button_class,
+                                    if is_generating { "animate-pulse" } else { "" },
                                 )
 
                                 on:click=move |_| {
-                                    log::info!("Clicked thread: {}", thread_id_for_click);
+                                    log::debug!("Clicked thread: {thread_id_for_click}");
                                     set_current_thread_id.run(thread_id_for_click.clone());
                                 }
                             >
 
                                 <div class="flex items-center">
                                     <span class="mr-2">{icon}</span>
-                                    <p class=format!(
-                                        "thread-name ib text-sm {} transition duration-0 ease-in-out",
-                                        text_class,
-                                    )>{get_display_name(&thread_for_display)}</p>
+                                    <div class="flex items-center space-x-2 flex-1 min-w-0">
+                                        <p class=format!(
+                                            "thread-name {} transition duration-0 ease-in-out truncate flex-1 text-left",
+                                            text_class,
+                                        )>{move || display_name.get()}</p>
+                                        {move || {
+                                            if is_generating {
+                                                view! {
+                                                    <div class="flex-shrink-0">
+                                                        <svg
+                                                            class="animate-spin h-3 w-3 text-current"
+                                                            xmlns="http://www.w3.org/2000/svg"
+                                                            fill="none"
+                                                            viewBox="0 0 24 24"
+                                                        >
+                                                            <circle
+                                                                class="opacity-25"
+                                                                cx="12"
+                                                                cy="12"
+                                                                r="10"
+                                                                stroke="currentColor"
+                                                                stroke-width="4"
+                                                            ></circle>
+                                                            <path
+                                                                class="opacity-75"
+                                                                fill="currentColor"
+                                                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                                                            ></path>
+                                                        </svg>
+                                                    </div>
+                                                }
+                                                    .into_any()
+                                            } else {
+                                                view! { <div></div> }.into_any()
+                                            }
+                                        }}
+
+                                    </div>
                                 </div>
                             </button>
                         }
@@ -520,6 +673,7 @@ fn ThreadTreeNode(
                                     delete_action=delete_action
                                     depth=depth + 1
                                     is_last_child=is_last
+                                    title_updates=title_updates
                                 />
                             }
                         }
@@ -595,7 +749,7 @@ fn UserInfo() -> impl IntoView {
 
     view! {
         <div class="border-t border-gray-400 dark:border-teal-600 pt-3 mt-3">
-            <Suspense fallback=|| {
+            <Transition fallback=|| {
                 view! {
                     <div class="flex items-center space-x-3 p-3 bg-gray-100 dark:bg-teal-700 rounded-lg">
                         <div class="w-10 h-10 bg-gray-300 dark:bg-teal-600 rounded-full animate-pulse"></div>
@@ -713,7 +867,7 @@ fn UserInfo() -> impl IntoView {
                     }
                 }}
 
-            </Suspense>
+            </Transition>
         </div>
     }
 }

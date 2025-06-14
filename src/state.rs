@@ -3,11 +3,13 @@ use cfg_if::cfg_if;
 cfg_if! {
     if #[cfg(feature = "ssr")] {
         use axum::extract::FromRef;
-        use tokio::sync::broadcast;
-        use std::sync::{Arc,Mutex};
+        use axum::response::sse::Event;
+        use dashmap::DashMap;
         use leptos::prelude::LeptosOptions;
         use serde::{Serialize, Deserialize};
-        use dashmap::DashMap;
+        use std::convert::Infallible;
+        use std::sync::{Arc,Mutex};
+        use tokio::sync::{broadcast, mpsc};
 
         use crate::cancellable_sse::SseState;
         use crate::database::db::DbPool;
@@ -26,6 +28,9 @@ cfg_if! {
             pub user_id: String,
         }
 
+        pub type TitleUpdateSender = mpsc::Sender<Result<Event, Infallible>>;
+        pub type TitleUpdateSenders = Arc<DashMap<i32, TitleUpdateSender>>;
+
         #[derive(FromRef, Clone)]
         pub struct AppState {
             pub leptos_options: LeptosOptions,
@@ -34,6 +39,7 @@ cfg_if! {
             pub drawing_tx: broadcast::Sender<DrawEvent>,
             pub user_count: Arc<Mutex<usize>>,
             pub oauth_states: Arc<DashMap<String, OAuthState>>,
+            pub title_update_senders: TitleUpdateSenders,
         }
 
         impl AppState {
@@ -46,6 +52,7 @@ cfg_if! {
                     drawing_tx,
                     user_count: Arc::new(Mutex::new(0)),
                     oauth_states: Arc::new(DashMap::new()),
+                    title_update_senders: Arc::new(DashMap::new()),
                 }
             }
         }

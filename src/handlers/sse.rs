@@ -4,13 +4,14 @@ use axum::{
     Json,
     http::StatusCode,
 };
+use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use tokio::sync::mpsc as tokio_mpsc;
 use futures::stream::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use log::info;
+use log::{debug, info};
 
 use crate::{
     cancellable_sse::{create_cancellable_sse_stream, CancellableSseStream},
@@ -107,7 +108,6 @@ pub async fn send_message_stream_handler(
 ) -> Result<Sse<SseStream>, StatusCode> {
     let user_id = claims.user_id()
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    
     let thread_id = params.get("thread_id")
         .ok_or(StatusCode::BAD_REQUEST)?;
     let model = params.get("model")
@@ -115,7 +115,7 @@ pub async fn send_message_stream_handler(
     let lab = params.get("lab")
         .ok_or(StatusCode::BAD_REQUEST)?;
     
-    info!("Starting message stream for user: {user_id} - thread: {thread_id}, model: {model}, lab: {lab}");
+    debug!("Starting message stream for user: {user_id} - thread: {thread_id}, model: {model}, lab: {lab}");
     
     let (tx, rx) = tokio_mpsc::channel(100);
     
@@ -128,5 +128,38 @@ pub async fn send_message_stream_handler(
         crate::components::chat::send_message_stream(&pool, thread_id, model, lab, tx).await;
     });
     
+    Ok(Sse::new(SseStream { receiver: rx }))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TitleUpdate {
+    pub thread_id: String,
+    pub title: String,
+    pub status: String,
+}
+
+impl TitleUpdate {
+    pub fn into_event(self) -> Result<Event, Infallible> {
+        Ok(Event::default()
+            .event("title_update")
+            .data(serde_json::to_string(&self).unwrap_or_default()))
+    }
+}
+
+pub async fn title_updates_handler(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Sse<SseStream>, StatusCode> {
+    let user_id = claims.user_id()
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    debug!("Starting title updates stream for user: {user_id}");
+
+    let (tx, rx) = tokio_mpsc::channel(100);
+
+    {
+        state.title_update_senders.insert(user_id, tx);
+    }
+
     Ok(Sse::new(SseStream { receiver: rx }))
 }

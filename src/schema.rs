@@ -27,6 +27,8 @@ diesel::table! {
         branch_point_message_id -> Nullable<Int4>,
         #[max_length = 255]
         branch_name -> Nullable<Varchar>,
+        #[max_length = 255]
+        title -> Nullable<Varchar>,
     }
 }
 

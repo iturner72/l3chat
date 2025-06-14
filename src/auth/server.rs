@@ -9,7 +9,7 @@ pub mod middleware {
         http::StatusCode,
     };
     use axum_extra::extract::CookieJar;
-    use log::{info, debug, warn};
+    use log::{debug, warn};
     
     use crate::state::AppState;
     use crate::auth::verify_jwt_token;
@@ -21,7 +21,7 @@ pub mod middleware {
         request: Request,
         next: Next,
     ) -> Response {
-        info!(
+        debug!(
             "Auth middleware - Processing request to: {} {}",
             request.method(),
             request.uri()
@@ -72,12 +72,7 @@ cfg_if! {
             http::Request,
         };
         use crate::auth::Claims;
-        // Helper function to extract user claims from request (for use in handlers)
-        pub fn get_user_from_request(request: &Request<Body>) -> Option<&Claims> {
-            request.extensions().get::<Claims>()
-        }
         
-        // Alternative: Extract user ID directly
         pub fn get_user_id_from_request(request: &Request<Body>) -> Option<i32> {
             request.extensions()
                 .get::<Claims>()

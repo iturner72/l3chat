@@ -21,7 +21,7 @@ cfg_if! {
         use std::task::{Context, Poll};
         use tokio::sync::mpsc;
         use futures::stream::{Stream, StreamExt};
-        use log::{debug, info};
+        use log::debug;
 
         use crate::database::db::DbPool;
         use crate::models::conversations::Message;
@@ -65,8 +65,8 @@ cfg_if! {
                 thread_id: &str,
                 tx: mpsc::Sender<Result<Event, std::convert::Infallible>>
             ) -> Result<(), anyhow::Error> {
-                info!("Sending message to OpenAI API");
-                info!("Current thread id: {thread_id}");
+                debug!("Sending message to OpenAI API");
+                debug!("Current thread id: {thread_id}");
 
                 let history = fetch_message_history(thread_id, pool).await?;
         
@@ -102,7 +102,7 @@ cfg_if! {
 
                             for line in event.trim().lines() {
                                 if line.trim() == "event: message_stop" {
-                                    info!("Received message_stop event");
+                                    debug!("Received message_stop event");
                                     tx.send(Ok(Event::default().data("[DONE]"))).await.ok();
                                     break;
                                 } else if line.trim().starts_with("data: ") {
@@ -124,7 +124,7 @@ cfg_if! {
                     }
                 }
 
-                info!("Stream closed");
+                debug!("Stream closed");
                 Ok(())
             }
         }
@@ -142,8 +142,8 @@ cfg_if! {
                 thread_id: &str,
                 tx: mpsc::Sender<Result<Event, std::convert::Infallible>>
             ) -> Result<(), anyhow::Error> {
-                info!("Sending message to OpenAI API");
-                info!("Current thread id: {thread_id}");
+                debug!("Sending message to OpenAI API");
+                debug!("Current thread id: {thread_id}");
 
                 let history = fetch_message_history(thread_id, pool).await?;
 
@@ -178,7 +178,7 @@ cfg_if! {
 
                             for line in event.trim().lines() {
                                 if line.trim() == "data: [DONE]" {
-                                    info!("Received [DONE] event");
+                                    debug!("Received [DONE] event");
                                     tx.send(Ok(Event::default().data("[DONE]"))).await.ok();
                                     break;
                                 } else if line.trim().starts_with("data: ") {
@@ -200,7 +200,7 @@ cfg_if! {
                     }
                 }
 
-                info!("Stream closed");
+                debug!("Stream closed");
                 Ok(())
             }
         }
@@ -526,7 +526,7 @@ pub fn Chat(
 #[server(CreateMessage, "/api")]
 pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> Result<(), ServerFnError> {
     use diesel::prelude::*;
-    use diesel_async::AsyncConnection;
+    use diesel_async::{AsyncConnection, RunQueryDsl};
     use std::fmt;
 
     use crate::state::AppState;
@@ -565,10 +565,55 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
         .await
         .map_err(|e| CreateMessageError::PoolError(e.to_string()))?;
 
-    let new_message: NewMessage = new_message_view.into();
-
     let current_user = get_current_user().await.map_err(|_| CreateMessageError::Unauthorized)?;
     let user_id = current_user.ok_or(CreateMessageError::Unauthorized)?.id;
+
+    let new_message: NewMessage = new_message_view.clone().into();
+
+    let is_first_user_message = if !is_llm && new_message.role == "user" {
+        // Get the current thread to check if it's a branch
+        let current_thread_result: Result<Thread, diesel::result::Error> = threads::table
+            .filter(threads::id.eq(&new_message.thread_id))
+            .get_result(&mut conn)
+            .await;
+        
+        match current_thread_result {
+            Ok(thread) => {
+                if let Some(_parent_thread_id) = thread.parent_thread_id {
+                    // This is a branch - check if any NEW messages have been added since creation
+                    let messages_added_after_branch: i64 = messages::table
+                        .filter(messages::thread_id.eq(&new_message.thread_id))
+                        .filter(messages::created_at.gt(thread.created_at.unwrap_or_default()))
+                        .filter(messages::role.eq("user"))
+                        .count()
+                        .get_result(&mut conn)
+                        .await
+                        .map_err(CreateMessageError::DatabaseError)?;
+                    messages_added_after_branch == 0
+                } else {
+                    // Root thread - use original logic
+                    let message_count: i64 = messages::table
+                        .filter(messages::thread_id.eq(&new_message.thread_id))
+                        .filter(messages::role.eq("user"))
+                        .count()
+                        .get_result(&mut conn)
+                        .await
+                        .map_err(CreateMessageError::DatabaseError)?;
+                    message_count == 0
+                }
+            }
+            Err(diesel::result::Error::NotFound) => {
+                // Thread doesn't exist, so definitely not the first message
+                false
+            }
+            Err(e) => {
+                // Other database error
+                return Err(CreateMessageError::DatabaseError(e).into());
+            }
+        }
+    } else {
+        false
+    };
 
     // Use async transaction
     conn.transaction(|conn| {
@@ -594,6 +639,7 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
                         parent_thread_id: None,
                         branch_point_message_id: None,
                         branch_name: None,
+                        title: None,
                     };
                     
                     diesel_async::RunQueryDsl::execute(
@@ -611,7 +657,7 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
             .await?;
 
             if !is_llm {
-                log::info!("Message successfully inserted into the database: {new_message:?}");
+                log::debug!("Message successfully inserted into the database: {new_message:?}");
             }
 
             Ok(())
@@ -619,6 +665,26 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
     })
     .await
     .map_err(CreateMessageError::DatabaseError)?;
+
+    if is_first_user_message {
+        if let Some(content) = new_message_view.content {
+            let app_state_clone = app_state.clone();
+            let thread_id = new_message_view.thread_id.clone();
+            let content_clone = content.clone();
+
+            tokio::spawn(async move {
+                #[cfg(feature = "ssr")]
+                {
+                    crate::services::title_generation::generate_and_update_title_with_sse(
+                        app_state_clone,
+                        user_id,
+                        thread_id,
+                        content_clone
+                    ).await;
+                }
+            });
+        }
+    }
 
     Ok(())
 }

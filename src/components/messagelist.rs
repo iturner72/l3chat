@@ -286,7 +286,7 @@ pub fn MessageList(
         use web_sys::KeyboardEvent;
         
         let handle_keydown = {
-            let navigate_to_match = navigate_to_match.clone();
+            let navigate_to_match = navigate_to_match;
             Closure::wrap(Box::new(move |event: KeyboardEvent| {
                 let term = search_term.map(|s| s.get()).unwrap_or_default();
                 if term.is_empty() || total_matches.get() == 0 {
@@ -300,8 +300,8 @@ pub fn MessageList(
                     set_current_match_index.set(new_index);
                     navigate_to_match(new_index);
                 }
-                // Cmd+P (or Win+P) - Previous match
-                else if event.key() == "p" && (event.meta_key() || event.ctrl_key()) {
+                // Cmd+P (or Win+I) - Previous match
+                else if event.key() == "i" && (event.meta_key() || event.ctrl_key()) {
                     event.prevent_default();
                     let new_index = if current_match_index.get() == 0 {
                         total_matches.get().saturating_sub(1)
@@ -404,7 +404,7 @@ pub fn MessageList(
 
                                             disabled=move || total_matches.get() <= 1
                                         >
-                                            "↑"
+                                            "↓"
                                         </button>
                                         <button
                                             class="px-2 py-1 text-xs bg-mint-200 dark:bg-mint-800 hover:bg-mint-300 dark:hover:bg-mint-700 
@@ -418,10 +418,10 @@ pub fn MessageList(
 
                                             disabled=move || total_matches.get() <= 1
                                         >
-                                            "↓"
+                                            "↑"
                                         </button>
                                         <span class="text-xs text-mint-600 dark:text-mint-400 ml-2">
-                                            "⌘J/⌘P • F3/⇧F3"
+                                            "⌘J/⌘I • F3/⇧F3"
                                         </span>
                                     </div>
                                 </div>
@@ -432,7 +432,7 @@ pub fn MessageList(
                         view! { <div></div> }.into_any()
                     }
                 }}
-                <Suspense fallback=move || {
+                <Transition fallback=move || {
                     view! {
                         <div class="animate-pulse bg-gray-300 dark:bg-teal-600 h-8 rounded-md"></div>
                     }
@@ -499,11 +499,11 @@ pub fn MessageList(
                             .unwrap_or_else(|| view! { <div></div> }.into_any())
                     }}
 
-                </Suspense>
+                </Transition>
             </div>
 
             <div class="flex-1 overflow-y-auto overflow-x-hidden pr-2 min-w-0 w-full">
-                <Suspense fallback=move || {
+                <Transition fallback=move || {
                     view! {
                         <div class="space-y-4 w-full overflow-hidden">
                             <div class="animate-pulse bg-gray-200 dark:bg-teal-800 h-20 rounded-lg"></div>
@@ -689,7 +689,7 @@ pub fn MessageList(
                         }
                     }}
 
-                </Suspense>
+                </Transition>
             </div>
         </div>
     }
@@ -892,6 +892,7 @@ pub async fn create_branch(
                 parent_thread_id: Some(source_thread_id_clone.clone()),
                 branch_point_message_id: Some(branch_point_message_id),
                 branch_name: Some(branch_name),
+                title: None,
             };
     
             diesel::insert_into(threads::table)

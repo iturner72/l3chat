@@ -11,6 +11,7 @@ cfg_if! {
             middleware,
             Router,
         };
+        use dashmap::DashMap;
         use dotenv::dotenv;
         use env_logger::Env;
         use l3chat::state::AppState;
@@ -27,6 +28,7 @@ cfg_if! {
                 embeddings_generation_handler,
                 local_embeddings_generation_handler,
                 send_message_stream_handler,
+                title_updates_handler,
             },
             drawing_ws::drawing_ws_handler,
         };
@@ -55,6 +57,7 @@ cfg_if! {
                 drawing_tx: broadcast::Sender::new(100),
                 user_count: Arc::new(Mutex::new(0)),
                 oauth_states: Arc::new(dashmap::DashMap::new()),
+                title_update_senders: Arc::new(DashMap::new())
             };
 
             async fn server_fn_handler(
@@ -83,6 +86,7 @@ cfg_if! {
                 .route("/api/generate-embeddings", get(embeddings_generation_handler))
                 .route("/api/generate-local-embeddings", get(local_embeddings_generation_handler))
                 .route("/api/send_message_stream", get(send_message_stream_handler))
+                .route("/api/title-updates", get(title_updates_handler))
                 .layer(middleware::from_fn_with_state(
                     app_state.clone(),
                     require_auth_no_db

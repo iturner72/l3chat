@@ -1,0 +1,1 @@
+ALTER TABLE threads ADD COLUMN title VARCHAR(255);
