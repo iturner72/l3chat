@@ -125,7 +125,7 @@ pub async fn send_message_stream_handler(
     let lab = lab.clone();
     
     tokio::spawn(async move {
-        crate::components::chat::send_message_stream(&pool, thread_id, model, lab, tx).await;
+        crate::components::chat::send_message_stream_with_project(&pool, thread_id, model, lab, tx).await;
     });
     
     Ok(Sse::new(SseStream { receiver: rx }))

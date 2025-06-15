@@ -1,6 +1,7 @@
 use cfg_if::cfg_if;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ThreadView {
@@ -12,6 +13,8 @@ pub struct ThreadView {
     pub branch_point_message_id: Option<i32>,
     pub branch_name: Option<String>,
     pub title: Option<String>,
+    pub project_id: Option<Uuid>,
+    pub project_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -150,6 +153,7 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub branch_point_message_id: Option<i32>,
         pub branch_name: Option<String>,
         pub title: Option<String>,
+        pub project_id: Option<Uuid>,
     }
 
     impl From<Thread> for ThreadView {
@@ -163,6 +167,8 @@ cfg_if! { if #[cfg(feature = "ssr")] {
                 branch_point_message_id: thread.branch_point_message_id,
                 branch_name: thread.branch_name,
                 title: thread.title,
+                project_id: thread.project_id,
+                project_name: None,
             }
         }
     }

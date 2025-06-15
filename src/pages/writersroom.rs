@@ -1,15 +1,22 @@
-use leptos::prelude::*;
+use leptos::{prelude::*, task::spawn_local};
 use leptos_icons::Icon;
 use leptos_fetch::QueryClient;
+use uuid::Uuid;
 
 use crate::components::auth_nav::AuthNav;
 use crate::components::chat::Chat;
+use crate::components::projects::ProjectsPage;
 use crate::components::threadlist::ThreadList;
 use crate::components::messagelist::MessageList;
 use crate::components::toast::Toast;
 use crate::models::conversations::PendingMessage;
+use crate::models::projects::ProjectView;
+use crate::server_fn::projects::{get_user_projects, create_project_thread};
 
-async fn create_thread_query() -> Result<String, String> {
+async fn create_project_thread_query(project_id: Uuid) -> Result<String, String> {
+    create_project_thread(project_id).await.map_err(|e| e.to_string())
+
+}async fn create_thread_query() -> Result<String, String> {
     create_thread().await.map_err(|e| e.to_string())
 }
 
@@ -18,43 +25,69 @@ pub fn WritersRoom() -> impl IntoView {
     let client: QueryClient = expect_context();
     
     let (show_threads, set_show_threads) = signal(false);
-    let (thread_id, set_thread_id) = signal("0001".to_string());
+    let (thread_id, set_thread_id) = signal(Uuid::new_v4().to_string());
     let (toast_visible, set_toast_visible) = signal(false);
     let (toast_message, set_toast_message) = signal(String::new());
     let (message_refetch_trigger, set_message_refetch_trigger) = signal(0);
     let (search_term, set_search_term) = signal(String::new());
     let (search_action, set_search_action) = signal(false);
     let (pending_messages, set_pending_messages) = signal(Vec::<PendingMessage>::new());
+    let (selected_project, set_selected_project) = signal(None::<Uuid>);
+    let (available_projects, set_available_projects) = signal(Vec::<ProjectView>::new());
 
-    let create_thread_action = Action::new(move |_: &()| {
-        async move {
-            match create_thread_query().await {
-                Ok(new_thread_id) => {
-                    set_thread_id(new_thread_id.clone());
-                    set_toast_message(format!("New thread created: {new_thread_id}"));
-                    set_toast_visible(true);
-
-                    client.invalidate_query(crate::components::threadlist::get_threads_query, ());
-                    
-                    set_message_refetch_trigger.update(|n| *n += 1);
-                    set_pending_messages.update(|msgs| msgs.clear());
-                    
-                    set_search_term.set(String::new());
-                    
-                    set_timeout(
-                        move || set_toast_visible(false),
-                        std::time::Duration::from_secs(3)
-                    );
-                    
-                    Ok(())
-                }
-                Err(e) => Err(format!("Failed to create thread: {e}"))
+    Effect::new(move |_| {
+        spawn_local(async move {
+            match get_user_projects().await {
+                Ok(projects) => set_available_projects.set(projects),
+                Err(e) => log::error!("Failed to load projects: {e}"),
             }
+        });
+    });
+
+    let create_thread_action = Action::new(move |project_id: &Option<Uuid>| {
+        let project_id = *project_id;
+        async move {
+            let new_thread_id = if let Some(proj_id) = project_id {
+                create_project_thread_query(proj_id).await?
+            } else {
+                create_thread_query().await?
+            };
+            set_thread_id(new_thread_id.clone());
+            set_toast_message(format!("New thread created: {new_thread_id}"));
+            set_toast_visible(true);
+
+            client.invalidate_query(crate::components::threadlist::get_threads_query, ());
+            
+            set_message_refetch_trigger.update(|n| *n += 1);
+            set_pending_messages.update(|msgs| msgs.clear());
+            
+            set_search_term.set(String::new());
+            
+            set_timeout(
+                move || set_toast_visible(false),
+                std::time::Duration::from_secs(3)
+            );
+            
+            Ok(())
         }
     });
 
     let on_message_created = Callback::new(move |_: ()| {
         set_message_refetch_trigger.update(|n| *n += 1);
+    });
+
+    let on_thread_created = Callback::new(move |_new_thread_id: String| {
+        client.invalidate_query(crate::components::threadlist::get_threads_query, ());
+
+        set_message_refetch_trigger.update(|n| *n += 1);
+
+        set_toast_message.set("Started new conversation".to_string());
+        set_toast_visible.set(true);
+
+        set_timeout(
+            move || set_toast_visible(false),
+            std::time::Duration::from_secs(5)
+        );
     });
 
     let thread_switch_callback = Callback::new(move |new_id: String| {
@@ -108,6 +141,35 @@ pub fn WritersRoom() -> impl IntoView {
                             }}
 
                         </button>
+
+                        <select
+                            class="ib text-xs md:text-sm text-teal-700 dark:text-teal-100 
+                            px-3 py-2 bg-gray-400 dark:bg-teal-700 
+                            border border-gray-600 dark:border-gray-500 
+                            rounded transition-colors duration-100"
+                            on:change=move |ev| {
+                                let value = event_target_value(&ev);
+                                if let Ok(uuid) = Uuid::parse_str(&value) {
+                                    set_selected_project.set(Some(uuid));
+                                }
+                            }
+                        >
+
+                            <option value="">"Regular Chat"</option>
+                            <For
+                                each=move || available_projects.get()
+                                key=|project| project.id
+                                children=move |project| {
+                                    view! {
+                                        <option value=project
+                                            .id
+                                            .to_string()>{format!("📁 {}", project.name)}</option>
+                                    }
+                                }
+                            />
+
+                        </select>
+
                         <button
                             class="ib text-xs md:text-sm text-teal-700 dark:text-teal-100 hover:text-teal-600 dark:hover:text-teal-200 
                             px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
@@ -115,16 +177,24 @@ pub fn WritersRoom() -> impl IntoView {
                             rounded transition-colors duration-100 flex items-center justify-center"
                             disabled=move || create_thread_action.pending().get()
                             on:click=move |_| {
-                                create_thread_action.dispatch(());
+                                create_thread_action.dispatch(selected_project.get());
                             }
                         >
 
                             <Icon icon=icondata::FiPlus width="16" height="16"/>
                             {move || {
                                 if create_thread_action.pending().get() {
-                                    " Creating..."
+                                    if selected_project.get().is_some() {
+                                        " Creating Project Chat..."
+                                    } else {
+                                        " Creating..."
+                                    }
                                 } else {
-                                    ""
+                                    if selected_project.get().is_some() {
+                                        " New Project Chat"
+                                    } else {
+                                        ""
+                                    }
                                 }
                             }}
 
@@ -230,7 +300,21 @@ pub fn WritersRoom() -> impl IntoView {
                             thread_id=thread_id
                             on_message_created=on_message_created
                             pending_messages=set_pending_messages
+                            on_thread_created=on_thread_created
                         />
+                    </div>
+                </div>
+
+                <div class=move || {
+                    let base_class = "transition-all duration-0 ease-in-out overflow-hidden border-r border-gray-400 dark:border-teal-700 bg-gray-200 dark:bg-teal-800 flex-shrink-0";
+                    if show_threads.get() {
+                        format!("{base_class} w-5/12 opacity-100")
+                    } else {
+                        format!("{base_class} w-0 opacity-0")
+                    }
+                }>
+                    <div class="p-4 h-full overflow-y-auto w-auto">
+                        <ProjectsPage/>
                     </div>
                 </div>
             </div>
@@ -302,6 +386,7 @@ pub async fn create_thread() -> Result<String, ServerFnError> {
         branch_point_message_id: None,
         branch_name: None,
         title: None, 
+        project_id: None,
     };
 
     diesel::insert_into(threads::table)

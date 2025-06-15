@@ -59,6 +59,86 @@ cfg_if! {
                 AnthropicService { client, api_key, model }
             }
 
+            pub async fn send_message_with_context(
+                &self,
+                pool: &DbPool,
+                thread_id: &str,
+                context: &str,
+                tx: mpsc::Sender<Result<Event, std::convert::Infallible>>
+            ) -> Result<(), anyhow::Error> {
+                debug!("Sending message to Anthropic API with project context");
+                debug!("Current thread id: {thread_id}");
+            
+                let mut history = fetch_message_history(thread_id, pool).await?;
+                
+                // Inject context before the last user message
+                if let Some(last_message) = history.last_mut() {
+                    if last_message.role == "user" {
+                        if let Some(ref mut content) = last_message.content {
+                            *content = format!("{context}\n\nUser Query: {content}");
+                        }
+                    }
+                }
+            
+                let api_messages = history.into_iter()
+                    .map(|msg| serde_json::json!({
+                        "role": msg.role,
+                        "content": msg.content.unwrap_or_default(),
+                    }))
+                    .collect::<Vec<_>>();
+            
+                let response = self.client.post("https://api.anthropic.com/v1/messages")
+                    .header("x-api-key", self.api_key.to_string())
+                    .header("anthropic-version", "2023-06-01")
+                    .header("Content-Type", "application/json")
+                    .json(&serde_json::json!({
+                        "model": self.model,
+                        "messages": api_messages,
+                        "max_tokens": 1360,
+                        "stream": true,
+                    }))
+                    .send()
+                    .await
+                    .map_err(|e| anyhow!("Failed to send message: {}", e))?;
+            
+                // Same streaming logic as original send_message method...
+                let mut stream = response.bytes_stream();
+                let re = Regex::new(r#""text":"([^"]*)""#).unwrap();
+                
+                while let Some(item) = stream.next().await {
+                    match item {
+                        Ok(bytes) => {
+                            let event = String::from_utf8(bytes.to_vec()).map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
+                            debug!("Trimmed event: {}", event.trim());
+            
+                            for line in event.trim().lines() {
+                                if line.trim() == "event: message_stop" {
+                                    debug!("Received message_stop event");
+                                    tx.send(Ok(Event::default().data("[DONE]"))).await.ok();
+                                    break;
+                                } else if line.trim().starts_with("data: ") {
+                                    let json_str = &line.trim()[6..];
+                                    for cap in re.captures_iter(json_str) {
+                                        let content = cap[1].to_string();
+                                        debug!("Extracted content: {content}");
+                                        tx.send(Ok(Event::default().data(content))).await.ok();
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to process stream: {e}");
+                            let error_event = Event::default().data(format!("Error: Failed to process stream: {e}"));
+                            tx.send(Ok(error_event)).await.ok();
+                            break;
+                        }
+                    }
+                }
+            
+                debug!("Stream closed");
+                Ok(())
+            }
+
             pub async fn send_message(
                 &self,
                 pool: &DbPool,
@@ -134,6 +214,85 @@ cfg_if! {
                 let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set.");
                 let client = Client::new();
                 OpenAIService { client, api_key, model }
+            }
+
+            pub async fn send_message_with_context(
+                &self,
+                pool: &DbPool,
+                thread_id: &str,
+                context: &str,
+                tx: mpsc::Sender<Result<Event, std::convert::Infallible>>
+            ) -> Result<(), anyhow::Error> {
+                debug!("Sending message to OpenAI API with project context");
+                debug!("Current thread id: {thread_id}");
+        
+                let mut history = fetch_message_history(thread_id, pool).await?;
+        
+                // Inject context before the last user message
+                if let Some(last_message) = history.last_mut() {
+                    if last_message.role == "user" {
+                        if let Some(ref mut content) = last_message.content {
+                            *content = format!("{}\n\nUser Query: {}", context, content);
+                        }
+                    }
+                }
+        
+                let api_messages = history.into_iter()
+                    .map(|msg| serde_json::json!({
+                        "role": msg.role,
+                        "content": msg.content.unwrap_or_default(),
+                    }))
+                    .collect::<Vec<_>>();
+        
+                let response = self.client.post("https://api.openai.com/v1/chat/completions")
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&serde_json::json!({
+                        "model": self.model,
+                        "messages": api_messages,
+                        "max_tokens": 1360,
+                        "stream": true,
+                    }))
+                    .send()
+                    .await
+                    .map_err(|e| anyhow!("Failed to send message: {}", e))?;
+        
+                // Same streaming logic as original send_message method...
+                let mut stream = response.bytes_stream();
+                let re = Regex::new(r#""content":"([^"]*)""#).unwrap();
+                
+                while let Some(item) = stream.next().await {
+                    match item {
+                        Ok(bytes) => {
+                            let event = String::from_utf8(bytes.to_vec()).map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
+                            debug!("Trimmed event: {}", event.trim());
+        
+                            for line in event.trim().lines() {
+                                if line.trim() == "data: [DONE]" {
+                                    debug!("Received [DONE] event");
+                                    tx.send(Ok(Event::default().data("[DONE]"))).await.ok();
+                                    break;
+                                } else if line.trim().starts_with("data: ") {
+                                    let json_str = &line.trim()[6..];
+                                    for cap in re.captures_iter(json_str) {
+                                        let content = cap[1].to_string();
+                                        debug!("Extracted content: {content}");
+                                        tx.send(Ok(Event::default().data(content))).await.ok();
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to process stream: {e}");
+                            let error_event = Event::default().data(format!("Error: Failed to process stream: {e}"));
+                            tx.send(Ok(error_event)).await.ok();
+                            break;
+                        }
+                    }
+                }
+        
+                debug!("Stream closed");
+                Ok(())
             }
 
             pub async fn send_message(
@@ -225,27 +384,103 @@ cfg_if! {
             Ok(messages)
         }
 
-        pub async fn send_message_stream(
+        #[cfg(feature = "ssr")]
+        pub async fn send_message_stream_with_project(
             pool: &DbPool,
             thread_id: String,
             model: String,
             active_lab: String,
             tx: mpsc::Sender<Result<Event, std::convert::Infallible>>
         ) {
+            use crate::services::projects::ProjectsService;
+            use crate::schema::threads;
+            use diesel::prelude::*;
+            use diesel_async::RunQueryDsl;
+        
             let decoded_thread_id = urlencoding::decode(&thread_id).expect("Failed to decode thread_id");
             let decoded_model = urlencoding::decode(&model).expect("Failed to decode model");
             let decoded_lab = urlencoding::decode(&active_lab).expect("failed to decode lab");
         
-            let result = match decoded_lab.as_ref() {
-                "anthropic" => {
-                    let anthropic_service = AnthropicService::new(decoded_model.into_owned());
-                    anthropic_service.send_message(pool, &decoded_thread_id, tx.clone()).await
-                },
-                "openai" => {
-                    let openai_service = OpenAIService::new(decoded_model.into_owned());
-                    openai_service.send_message(pool, &decoded_thread_id, tx.clone()).await
-                },
-                _ => Err(anyhow::anyhow!("unsupported lab: {}", decoded_lab)),
+            let mut conn = match pool.get().await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    error!("Failed to get database connection: {e}");
+                    return;
+                }
+            };
+        
+            // Check if this thread is associated with a project
+            let thread_info: Result<Option<uuid::Uuid>, diesel::result::Error> = threads::table
+                .select(threads::project_id)
+                .filter(threads::id.eq(decoded_thread_id.as_ref()))
+                .first(&mut conn)
+                .await;
+
+            log::debug!("found thread in project: {thread_info:?}");
+        
+            let project_id = match thread_info {
+                Ok(project_id) => project_id,
+                Err(e) => {
+                    error!("Failed to get thread info: {e}");
+                    None
+                }
+            };
+        
+            // If this is a project thread, get the last user message for context
+            let project_context = if let Some(proj_id) = project_id {
+                // Get the last user message to use as search query
+                let last_user_message = crate::components::chat::fetch_message_history(&decoded_thread_id, pool)
+                    .await
+                    .ok()
+                    .and_then(|messages| {
+                        messages.into_iter()
+                            .filter(|msg| msg.role == "user")
+                            .next_back()
+                            .and_then(|msg| msg.content)
+                    });
+        
+                if let Some(user_query) = last_user_message {
+                    let projects_service = ProjectsService::new();
+                    match projects_service.get_project_context(pool, proj_id, &user_query).await {
+                        Ok(context) => Some(context),
+                        Err(e) => {
+                            error!("Failed to get project context: {e}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+        
+            // Modify the message history to include project context
+            let result = if let Some(context) = project_context {
+                match decoded_lab.as_ref() {
+                    "anthropic" => {
+                        let anthropic_service = AnthropicService::new(decoded_model.into_owned());
+                        anthropic_service.send_message_with_context(pool, &decoded_thread_id, &context, tx.clone()).await
+                    },
+                    "openai" => {
+                        let openai_service = OpenAIService::new(decoded_model.into_owned());
+                        openai_service.send_message_with_context(pool, &decoded_thread_id, &context, tx.clone()).await
+                    },
+                    _ => Err(anyhow::anyhow!("unsupported lab: {}", decoded_lab)),
+                }
+            } else {
+                // Regular chat without project context
+                match decoded_lab.as_ref() {
+                    "anthropic" => {
+                        let anthropic_service = AnthropicService::new(decoded_model.into_owned());
+                        anthropic_service.send_message(pool, &decoded_thread_id, tx.clone()).await
+                    },
+                    "openai" => {
+                        let openai_service = OpenAIService::new(decoded_model.into_owned());
+                        openai_service.send_message(pool, &decoded_thread_id, tx.clone()).await
+                    },
+                    _ => Err(anyhow::anyhow!("unsupported lab: {}", decoded_lab)),
+                }
             };
         
             if let Err(e) = result {
@@ -262,6 +497,7 @@ pub fn Chat(
     thread_id: ReadSignal<String>,
     #[prop(optional)] on_message_created: Option<Callback<()>>,
     #[prop(optional)] pending_messages: Option<WriteSignal<Vec<PendingMessage>>>,
+    #[prop(optional)] on_thread_created: Option<Callback<String>>,
 ) -> impl IntoView {
     let (message, set_message) = signal(String::new());
     let (is_sending, set_is_sending) = signal(false);
@@ -295,6 +531,15 @@ pub fn Chat(
                 _ => None,
             };
 
+            let is_placeholder_thread = if let Ok(_uuid) = uuid::Uuid::parse_str(&current_thread_id) {
+                match check_thread_exists(current_thread_id.clone()).await {
+                    Ok(exists) => !exists,
+                    Err(_) => true,
+                } 
+            } else { 
+                false
+            };
+
             // 1. Save user message to DB immediately
             let user_message_view = NewMessageView {
                 thread_id: current_thread_id.clone(),
@@ -308,6 +553,12 @@ pub fn Chat(
             match create_message(user_message_view, false).await {
                 Ok(_) => {
                     set_message.set(String::new());
+
+                    if is_placeholder_thread {
+                        if let Some(callback) = on_thread_created {
+                            callback.run(current_thread_id.clone());
+                        }
+                    }
                     
                     if let Some(callback) = on_message_created {
                         callback.run(());
@@ -366,10 +617,9 @@ pub fn Chat(
                                 spawn_local(async move {
                                     if let Err(e) = create_message(assistant_message_view, is_llm).await {
                                         error!("Failed to create LLM message: {e:?}");
-                                    } else {
-                                        if let Some(callback) = on_message_created_clone {
-                                            callback.run(());
-                                        }
+                                    } 
+                                    if let Some(callback) = on_message_created_clone {
+                                        callback.run(());
                                     }
                                 });
 
@@ -570,54 +820,11 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
 
     let new_message: NewMessage = new_message_view.clone().into();
 
-    let is_first_user_message = if !is_llm && new_message.role == "user" {
-        // Get the current thread to check if it's a branch
-        let current_thread_result: Result<Thread, diesel::result::Error> = threads::table
-            .filter(threads::id.eq(&new_message.thread_id))
-            .get_result(&mut conn)
-            .await;
-        
-        match current_thread_result {
-            Ok(thread) => {
-                if let Some(_parent_thread_id) = thread.parent_thread_id {
-                    // This is a branch - check if any NEW messages have been added since creation
-                    let messages_added_after_branch: i64 = messages::table
-                        .filter(messages::thread_id.eq(&new_message.thread_id))
-                        .filter(messages::created_at.gt(thread.created_at.unwrap_or_default()))
-                        .filter(messages::role.eq("user"))
-                        .count()
-                        .get_result(&mut conn)
-                        .await
-                        .map_err(CreateMessageError::DatabaseError)?;
-                    messages_added_after_branch == 0
-                } else {
-                    // Root thread - use original logic
-                    let message_count: i64 = messages::table
-                        .filter(messages::thread_id.eq(&new_message.thread_id))
-                        .filter(messages::role.eq("user"))
-                        .count()
-                        .get_result(&mut conn)
-                        .await
-                        .map_err(CreateMessageError::DatabaseError)?;
-                    message_count == 0
-                }
-            }
-            Err(diesel::result::Error::NotFound) => {
-                // Thread doesn't exist, so definitely not the first message
-                false
-            }
-            Err(e) => {
-                // Other database error
-                return Err(CreateMessageError::DatabaseError(e).into());
-            }
-        }
-    } else {
-        false
-    };
-
     // Use async transaction
-    conn.transaction(|conn| {
+    let is_first_user_message = conn.transaction(|conn| {
         Box::pin(async move {
+            let mut thread_was_created = false;
+            
             if !is_llm {
                 let thread_id = &new_message.thread_id;
                 
@@ -640,6 +847,7 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
                         branch_point_message_id: None,
                         branch_name: None,
                         title: None,
+                        project_id: None,
                     };
                     
                     diesel_async::RunQueryDsl::execute(
@@ -647,6 +855,8 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
                         conn
                     )
                     .await?;
+                    
+                    thread_was_created = true;
                 }
             }
 
@@ -660,7 +870,49 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
                 log::debug!("Message successfully inserted into the database: {new_message:?}");
             }
 
-            Ok(())
+            // Calculate is_first_user_message AFTER thread creation and message insertion
+            let is_first_message = if !is_llm && new_message.role == "user" {
+                if thread_was_created {
+                    // If we just created the thread, this is definitely the first user message
+                    true
+                } else {
+                    // Thread already existed - check if this is the first user message
+                    let current_thread_result: Result<Thread, diesel::result::Error> = threads::table
+                        .filter(threads::id.eq(&new_message.thread_id))
+                        .get_result(conn)
+                        .await;
+                    
+                    match current_thread_result {
+                        Ok(thread) => {
+                            if let Some(_parent_thread_id) = thread.parent_thread_id {
+                                // This is a branch - check if any NEW messages have been added since creation
+                                let messages_added_after_branch: i64 = messages::table
+                                    .filter(messages::thread_id.eq(&new_message.thread_id))
+                                    .filter(messages::created_at.gt(thread.created_at.unwrap_or_default()))
+                                    .filter(messages::role.eq("user"))
+                                    .count()
+                                    .get_result(conn)
+                                    .await?;
+                                messages_added_after_branch == 1 // Should be 1 because we just inserted this message
+                            } else {
+                                // Root thread - check total user message count
+                                let message_count: i64 = messages::table
+                                    .filter(messages::thread_id.eq(&new_message.thread_id))
+                                    .filter(messages::role.eq("user"))
+                                    .count()
+                                    .get_result(conn)
+                                    .await?;
+                                message_count == 1 // Should be 1 because we just inserted this message
+                            }
+                        }
+                        Err(_) => false, // If we can't find the thread, something went wrong
+                    }
+                }
+            } else {
+                false
+            };
+
+            Ok(is_first_message)
         })
     })
     .await
@@ -687,4 +939,66 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
     }
 
     Ok(())
+}
+
+#[server(CheckThreadExists, "/api")]
+pub async fn check_thread_exists(thread_id: String) -> Result<bool, ServerFnError> {
+    use diesel::prelude::*;
+    use diesel_async::RunQueryDsl;
+    use std::fmt;
+
+    use crate::state::AppState;
+    use crate::schema::threads;
+    use crate::models::conversations::Thread;
+    use crate::auth::get_current_user;
+
+    #[derive(Debug)]
+    enum CheckThreadExistsError {
+        PoolError(String),
+        DatabaseError(diesel::result::Error),
+        Unauthorized,
+    }
+
+    impl fmt::Display for CheckThreadExistsError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                CheckThreadExistsError::PoolError(e) => write!(f, "Pool error: {e}"),
+                CheckThreadExistsError::DatabaseError(e) => write!(f, "Database error: {e}"),
+                CheckThreadExistsError::Unauthorized => write!(f, "unauthorized - user not logged in"),
+            }
+        }
+    }
+
+    impl From<CheckThreadExistsError> for ServerFnError {
+        fn from(error: CheckThreadExistsError) -> Self {
+            ServerFnError::ServerError(error.to_string())
+        }
+    }
+
+    impl From<diesel::result::Error> for CheckThreadExistsError {
+        fn from(error: diesel::result::Error) -> Self {
+            CheckThreadExistsError::DatabaseError(error)
+        }
+    }
+
+    let current_user = get_current_user().await.map_err(|_| CheckThreadExistsError::Unauthorized)?;
+    let _user_id = current_user.ok_or(CheckThreadExistsError::Unauthorized)?.id;
+
+    let app_state = use_context::<AppState>()
+        .expect("Failed to get AppState from context");
+
+    let mut conn = app_state.pool
+        .get()
+        .await
+        .map_err(|e| CheckThreadExistsError::PoolError(e.to_string()))?;
+
+    let thread_exists = threads::table
+        .find(&thread_id)
+        .first::<Thread>(&mut conn)
+        .await
+        .optional()
+        .map_err(CheckThreadExistsError::DatabaseError)?
+        .is_some();
+
+    Ok(thread_exists)
 }

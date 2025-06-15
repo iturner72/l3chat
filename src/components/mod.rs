@@ -9,6 +9,7 @@ pub mod local_embeddings;
 pub mod markdown;
 pub mod messagelist;
 pub mod poasts;
+pub mod projects;
 pub mod search;
 pub mod threadlist;
 pub mod toast;

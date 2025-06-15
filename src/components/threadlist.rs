@@ -160,7 +160,7 @@ pub fn ThreadList(
                     client.invalidate_query(get_threads_query, ());
                     client.invalidate_query(search_threads_query, search_query.get_untracked());
 
-                    if current_id == thread_id {
+                    if current_id.to_string() == thread_id {
                         match get_threads().await {
                             Ok(updated_threads) => {
                                 if let Some(next_thread) = updated_threads.first() {
@@ -367,7 +367,7 @@ pub fn ThreadList(
                             Some(Err(e)) => {
                                 view! {
                                     <div class="w-full">
-                                        <div class="text-red-500 text-sm">
+                                        <div class="text-salmon-500 text-sm">
                                             "Error loading threads: " {e}
                                         </div>
                                     </div>
@@ -411,12 +411,13 @@ fn ThreadTreeNode(
     let margin_left = format!("{}rem", depth as f32 * 1.5);
     
     // Use a memo for the active state to make it reactive properly
-    let is_active = Memo::new(move |_| current_thread_id.get() == thread_id_for_memo);
+    let is_active = Memo::new(move |_| current_thread_id.get().to_string() == thread_id_for_memo);
     
     // Determine styling based on whether it's a main thread or branch AND if it's active
     let get_styles = move || {
         let active = is_active.get();
         let is_branch = thread_for_styles.parent_thread_id.is_some();
+        let is_project = thread_for_styles.project_id.is_some();
         
         if is_branch {
             // This is a branch - use branch icon
@@ -441,6 +442,20 @@ fn ThreadTreeNode(
                     "ir text-sm text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-white",
                 )
             }
+        } else if is_project {
+            if active {
+                (
+                    view! { <span class="text-blue-200">{"📁"}</span> }.into_any(),
+                    "border-seafoam-500 bg-seafoam-600 dark:bg-seafoam-700",
+                    "ir text-sm text-gray-500 group-hover:text-gray-700",
+                )
+            } else {
+                (
+                    view! { <span class="text-blue-600 dark:text-blue-400">{"📁"}</span> }.into_any(),
+                    "border-seafoam-700 bg-gray-300 dark:bg-teal-800 hover:border-seafoam-800 hover:bg-gray-400 dark:hover:bg-gray-700",
+                    "ir text-sm text-gray-700 group-hover:text-gray-500 dark:text-gray-100 dark:group-hover:text-gray-500",
+                )
+            }
         } else {
             // This is a main thread - no icon
             if active {
@@ -463,49 +478,49 @@ fn ThreadTreeNode(
         let updates = title_updates.get();
         let thread = &thread_for_display;
         
-        log::debug!("Display name memo triggered for thread {}", thread.id);
-        log::debug!("Current title_updates in memo: {updates:?}");
-        
-        // Check for live updates FIRST, regardless of thread type
+        // Check for live updates FIRST
         if let Some(live_title) = updates.get(&thread.id) {
-            log::debug!("Thread {:?} using live title: '{:?}'", thread.id, live_title);
             return live_title.clone();
         }
         
-        // Then check for branch naming
+        // Check for branch naming
         if let Some(branch_name) = &thread.branch_name {
-            let result = format!("branch {branch_name}");
-            log::debug!("Thread {} display name (branch): {}", thread.id, result);
-            result
+            format!("branch {branch_name}")
         } else if thread.parent_thread_id.is_some() {
-            let result = "branch".to_string();
-            log::debug!("Thread {} display name (generic branch): {}", thread.id, result);
-            result
+            "branch".to_string()
         } else {
             // Root thread logic
-            if let Some(title) = &thread.title {
+            let base_title = if let Some(title) = &thread.title {
                 if !title.trim().is_empty() {
-                    log::debug!("Thread {} using database title: '{}'", thread.id, title);
                     title.clone()
                 } else {
-                    // Title is empty, show truncated ID
-                    let result = if thread.id.len() > 24 {
+                    if thread.id.len() > 24 {
                         format!("{}...", &thread.id[..24])
                     } else {
                         thread.id.clone()
-                    };
-                    log::debug!("Thread {} using truncated ID (empty title): '{}'", thread.id, result);
-                    result
+                    }
                 }
             } else {
-                // No title - just show truncated thread ID
-                let result = if thread.id.len() > 24 {
+                if thread.id.len() > 24 {
                     format!("{}...", &thread.id[..24])
                 } else {
                     thread.id.clone()
+                }
+            };
+    
+            // For project threads, show project name in the title
+            if let Some(project_name) = &thread.project_name {
+                // Truncate project name if too long
+                let truncated_project = if project_name.len() > 15 {
+                    format!("{}...", &project_name[..12])
+                } else {
+                    project_name.clone()
                 };
-                log::debug!("Thread {} using truncated ID (no title): '{}'", thread.id, result);
-                result
+                
+                // Show just the project name for cleaner look since we have the folder icon
+                truncated_project
+            } else {
+                base_title
             }
         }
     });
@@ -838,7 +853,7 @@ fn UserInfo() -> impl IntoView {
                                     }
                                     Err(_) => {
                                         view! {
-                                            <div class="flex items-center justify-center p-3 bg-red-100 dark:bg-red-900 text-red-600 dark:text-red-400 rounded-lg text-sm">
+                                            <div class="flex items-center justify-center p-3 bg-salmon-100 dark:bg-salmon-900 text-salmon-600 dark:text-salmon-400 rounded-lg text-sm">
                                                 "Error loading user"
                                             </div>
                                         }
@@ -874,13 +889,13 @@ fn UserInfo() -> impl IntoView {
 
 #[server(SearchThreads, "/api")]
 pub async fn search_threads(query: String) -> Result<Vec<ThreadView>, ServerFnError> {
+    use chrono::DateTime;
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;
     use std::fmt;
 
     use crate::state::AppState;
-    use crate::models::conversations::Thread;
-    use crate::schema::{threads, messages};
+    use crate::schema::{threads, messages, projects};
     use crate::auth::get_current_user;
 
     #[derive(Debug)]
@@ -924,20 +939,62 @@ pub async fn search_threads(query: String) -> Result<Vec<ThreadView>, ServerFnEr
 
     let result = threads::table
         .left_join(messages::table.on(messages::thread_id.eq(threads::id)))
+        .left_join(projects::table.on(threads::project_id.eq(projects::id.nullable())))
         .filter(threads::user_id.eq(other_user_id))
         .filter(
             threads::id.ilike(format!("%{query}%"))
                 .or(messages::content.ilike(format!("%{query}%")))
+                .or(projects::name.ilike(format!("%{query}%")))
         )
-        .select(threads::all_columns)
+        .select((
+            threads::id,
+            threads::created_at,
+            threads::updated_at,
+            threads::user_id,
+            threads::parent_thread_id,
+            threads::branch_point_message_id,
+            threads::branch_name,
+            threads::title,
+            threads::project_id,
+            projects::name.nullable(),
+        ))
         .distinct()
         .order(threads::created_at.desc())
-        .load::<Thread>(&mut conn)
+        .load::<(
+            String, 
+            Option<chrono::NaiveDateTime>, 
+            Option<chrono::NaiveDateTime>, 
+            Option<i32>, 
+            Option<String>, 
+            Option<i32>, 
+            Option<String>, 
+            Option<String>, 
+            Option<uuid::Uuid>, 
+            Option<String>
+        )>(&mut conn)
         .await
         .map_err(SearchError::Database)
         .map_err(to_server_error)?;
 
-    Ok(result.into_iter().map(ThreadView::from).collect())
+    let threads: Vec<ThreadView> = result
+        .into_iter()
+        .map(|(id, created_at, updated_at, user_id, parent_thread_id, branch_point_message_id, branch_name, title, project_id, project_name)| {
+            ThreadView {
+                id,
+                created_at: created_at.map(|dt| DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
+                updated_at: updated_at.map(|dt| DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
+                user_id,
+                parent_thread_id,
+                branch_point_message_id,
+                branch_name,
+                title,
+                project_id,
+                project_name,
+            }
+        })
+        .collect();
+
+    Ok(threads)
 }
 
 #[server(DeleteThread, "/api")]
@@ -1039,13 +1096,14 @@ pub async fn delete_thread(thread_id: String) -> Result<(), ServerFnError> {
 
 #[server(GetThreads, "/api")]
 pub async fn get_threads() -> Result<Vec<ThreadView>, ServerFnError> {
+    use chrono::DateTime;
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;
     use std::fmt;
+    use uuid::Uuid;
 
     use crate::state::AppState;
-    use crate::models::conversations::Thread;
-    use crate::schema::threads::dsl::threads as threads_table;
+    use crate::schema::{threads, projects};
     use crate::auth::get_current_user;
 
     #[derive(Debug)]
@@ -1087,15 +1145,46 @@ pub async fn get_threads() -> Result<Vec<ThreadView>, ServerFnError> {
         .map_err(|e| ThreadError::Pool(e.to_string()))
         .map_err(to_server_error)?;
 
-    let result = threads_table
-        .filter(crate::schema::threads::user_id.eq(user_id))
-        .order(crate::schema::threads::created_at.desc())
-        .load::<Thread>(&mut conn)
+    let result = threads::table
+        .left_join(projects::table.on(threads::project_id.eq(projects::id.nullable())))
+        .filter(threads::user_id.eq(user_id))
+        .select((
+            threads::id,
+            threads::created_at,
+            threads::updated_at,
+            threads::user_id,
+            threads::parent_thread_id,
+            threads::branch_point_message_id,
+            threads::branch_name,
+            threads::title,
+            threads::project_id,
+            projects::name.nullable(), // Project name
+        ))
+        .order(threads::created_at.desc())
+        .load::<(String, Option<chrono::NaiveDateTime>, Option<chrono::NaiveDateTime>, Option<i32>, Option<String>, Option<i32>, Option<String>, Option<String>, Option<Uuid>, Option<String>)>(&mut conn)
         .await
         .map_err(ThreadError::Database)
         .map_err(to_server_error)?;
 
-    Ok(result.into_iter().map(ThreadView::from).collect())
+    let threads: Vec<ThreadView> = result
+        .into_iter()
+        .map(|(id, created_at, updated_at, user_id, parent_thread_id, branch_point_message_id, branch_name, title, project_id, project_name)| {
+            ThreadView {
+                id,
+                created_at: created_at.map(|dt| DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
+                updated_at: updated_at.map(|dt| DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
+                user_id,
+                parent_thread_id,
+                branch_point_message_id,
+                branch_name,
+                title,
+                project_id,
+                project_name,
+            }
+        })
+        .collect();
+
+    Ok(threads)
 }
 
 #[server(GetThreadBranches, "/api")]

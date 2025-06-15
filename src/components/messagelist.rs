@@ -3,6 +3,7 @@ use leptos_fetch::QueryClient;
 use leptos_icons::Icon;
 use chrono::Utc;
 use std::borrow::Cow;
+use uuid::Uuid;
 use wasm_bindgen::JsCast;
 
 use crate::models::conversations::{MessageView, DisplayMessage, PendingMessage, BranchInfo};
@@ -122,12 +123,12 @@ pub fn MessageList(
 
     let messages_resource = client.resource(
         get_messages_query, 
-        move || current_thread_id.get()
+        move || current_thread_id.get().to_string()
     );
 
     let branches_resource = client.resource(
         get_branches_query,
-        move || current_thread_id.get()
+        move || current_thread_id.get().to_string()
     );
 
     // Manually invalidate when refetch trigger changes
@@ -154,13 +155,13 @@ pub fn MessageList(
         let mut combined: Vec<DisplayMessage> = Vec::new();
         
         for msg in db_messages {
-            if msg.thread_id == current_thread {
+            if msg.thread_id == current_thread.to_string() {
                 combined.push(DisplayMessage::Persisted(msg));
             }
         }
         
         for msg in pending {
-            if msg.thread_id == current_thread {
+            if msg.thread_id == current_thread.to_string() {
                 combined.push(DisplayMessage::Pending(msg));
             }
         }
@@ -233,50 +234,14 @@ pub fn MessageList(
         }
     });
 
-    // Debug effect to track search term changes
-    Effect::new(move |_| {
-        let term = search_term.map(|s| s.get()).unwrap_or_default();
-        let thread = current_thread_id.get();
-        log::info!("MessageList: search_term='{}', thread_id='{}'", term, thread);
-    });
-
     // Auto-apply search when thread changes and there's an active search term
     Effect::new(move |_| {
         let thread = current_thread_id.get();
         let term = search_term.map(|s| s.get()).unwrap_or_default();
         
-        log::info!("Thread change effect: thread='{}', term='{}'", thread, term);
-        
-        if !thread.is_empty() && !term.is_empty() {
+        if !thread.to_string().is_empty() && !term.is_empty() {
             // Reset match index when switching threads
             set_current_match_index.set(0);
-            
-            // Small delay to let messages load, then navigate to first match
-            set_timeout(
-                move || {
-                    log::info!("Navigating to first match after thread switch");
-                    navigate_to_match(0);
-                },
-                std::time::Duration::from_millis(500) // Increased delay to ensure messages are loaded
-            );
-        }
-    });
-
-    // Also trigger search navigation when messages finish loading
-    Effect::new(move |_| {
-        if let Some(Ok(_)) = messages_resource.get() {
-            let term = search_term.map(|s| s.get()).unwrap_or_default();
-            let matches = total_matches.get();
-            
-            if !term.is_empty() && matches > 0 && current_match_index.get() == 0 {
-                // Small delay to ensure DOM is updated
-                set_timeout(
-                    move || {
-                        navigate_to_match(0);
-                    },
-                    std::time::Duration::from_millis(100)
-                );
-            }
         }
     });
 
@@ -349,18 +314,26 @@ pub fn MessageList(
         let thread_id = current_thread_id.get();
         
         async move {
-            match create_branch(thread_id.clone(), message_id, None).await {
+            match create_branch(thread_id.to_string(), message_id, None).await {
                 Ok(new_thread_id) => {
-                    log::info!("Created branch: {}", new_thread_id);
-                    set_current_thread_id.set(new_thread_id);
-                    
-                    // Invalidate queries to refresh data
-                    let client: QueryClient = expect_context();
-                    client.invalidate_query(get_messages_query, current_thread_id.get());
-                    client.invalidate_query(get_branches_query, &thread_id);
-                    client.invalidate_query(crate::components::threadlist::get_threads_query, ());
-                    
-                    Ok(())
+                    // Parse the new_thread_id string into a Uuid
+                    match Uuid::parse_str(&new_thread_id) {
+                        Ok(uuid) => {
+                            set_current_thread_id.set(uuid.to_string());
+                            
+                            // Invalidate queries to refresh data
+                            let client: QueryClient = expect_context();
+                            client.invalidate_query(get_messages_query, new_thread_id.clone());
+                            client.invalidate_query(get_branches_query, thread_id.to_string());
+                            client.invalidate_query(crate::components::threadlist::get_threads_query, ());
+                            
+                            Ok(())
+                        },
+                        Err(e) => {
+                            log::error!("Failed to parse new thread ID as UUID: {:?}", e);
+                            Err(format!("Failed to parse new thread ID: {}", e))
+                        }
+                    }
                 }
                 Err(e) => {
                     log::error!("Failed to create branch: {:?}", e);
@@ -893,6 +866,7 @@ pub async fn create_branch(
                 branch_point_message_id: Some(branch_point_message_id),
                 branch_name: Some(branch_name),
                 title: None,
+                project_id: None,
             };
     
             diesel::insert_into(threads::table)

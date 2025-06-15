@@ -213,7 +213,7 @@ pub fn ProtectedAdminPanel() -> impl IntoView {
                                 view! {
                                     <div class="min-h-screen bg-gray-100 dark:bg-teal-900 flex items-center justify-center">
                                         <div class="text-center">
-                                            <h2 class="text-2xl font-bold text-red-600 mb-4">
+                                            <h2 class="text-2xl font-bold text-salmon-600 mb-4">
                                                 "Error"
                                             </h2>
                                             <p class="text-gray-600 dark:text-gray-400">
@@ -251,7 +251,7 @@ pub fn LogoutButton() -> impl IntoView {
                 logout_action.dispatch(Logout {});
             }
 
-            class="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded-md transition-colors"
+            class="px-3 py-1 text-sm bg-salmon-600 hover:bg-salmon-700 text-gray-600 dark:text-gray-400 rounded-md transition-colors"
         >
             "Logout"
         </button>
