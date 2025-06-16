@@ -20,6 +20,14 @@ async fn create_project_thread_query(project_id: Uuid) -> Result<String, String>
     create_thread().await.map_err(|e| e.to_string())
 }
 
+#[derive(Clone)]
+pub struct ThreadContext {
+    pub set_thread_id: WriteSignal<String>,
+    pub set_message_refetch_trigger: WriteSignal<i32>,
+    pub set_pending_messages: WriteSignal<Vec<PendingMessage>>,
+    pub set_search_term: WriteSignal<String>,
+}
+
 #[component]
 pub fn WritersRoom() -> impl IntoView {
     let client: QueryClient = expect_context();
@@ -32,8 +40,16 @@ pub fn WritersRoom() -> impl IntoView {
     let (search_term, set_search_term) = signal(String::new());
     let (search_action, set_search_action) = signal(false);
     let (pending_messages, set_pending_messages) = signal(Vec::<PendingMessage>::new());
-    let (selected_project, set_selected_project) = signal(None::<Uuid>);
-    let (available_projects, set_available_projects) = signal(Vec::<ProjectView>::new());
+    let (selected_project, _set_selected_project) = signal(None::<Uuid>);
+    let (_available_projects, set_available_projects) = signal(Vec::<ProjectView>::new());
+
+    let thread_context = ThreadContext {
+        set_thread_id,
+        set_message_refetch_trigger,
+        set_pending_messages,
+        set_search_term,
+    };
+    provide_context(thread_context);
 
     Effect::new(move |_| {
         spawn_local(async move {
@@ -114,10 +130,10 @@ pub fn WritersRoom() -> impl IntoView {
                 <div class="flex flex-row items-center justify-between">
                     <div class="flex flex-row items-center justify-center space-x-2">
                         <button
-                            class="ib text-xs md:text-sm text-gray-900 dark:text-gray-100 hover:text-gray-800 dark:hover:text-gray-200 
+                            class="ib text-xs md:text-sm text-teal-700 dark:text-teal-100 hover:text-gray-800 dark:hover:text-gray-200 
                             px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
                             border border-gray-600 dark:border-gray-500 hover:border-gray-800 dark:hover:border-gray-400 
-                            rounded transition-colors duration-100 flex items-center justify-center"
+                            rounded transition-colors duration-0 flex items-center justify-center"
                             on:click=move |_| set_show_threads.update(|v| *v = !*v)
                         >
                             {move || {
@@ -127,6 +143,7 @@ pub fn WritersRoom() -> impl IntoView {
                                             icon=icondata::TbLayoutSidebarRightExpandFilled
                                             width="16"
                                             height="16"
+                                            style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
                                         />
                                     }
                                 } else {
@@ -135,6 +152,7 @@ pub fn WritersRoom() -> impl IntoView {
                                             icon=icondata::TbLayoutSidebarLeftExpandFilled
                                             width="16"
                                             height="16"
+                                            style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
                                         />
                                     }
                                 }
@@ -142,46 +160,23 @@ pub fn WritersRoom() -> impl IntoView {
 
                         </button>
 
-                        <select
-                            class="ib text-xs md:text-sm text-teal-700 dark:text-teal-100 
-                            px-3 py-2 bg-gray-400 dark:bg-teal-700 
-                            border border-gray-600 dark:border-gray-500 
-                            rounded transition-colors duration-100"
-                            on:change=move |ev| {
-                                let value = event_target_value(&ev);
-                                if let Ok(uuid) = Uuid::parse_str(&value) {
-                                    set_selected_project.set(Some(uuid));
-                                }
-                            }
-                        >
-
-                            <option value="">"Regular Chat"</option>
-                            <For
-                                each=move || available_projects.get()
-                                key=|project| project.id
-                                children=move |project| {
-                                    view! {
-                                        <option value=project
-                                            .id
-                                            .to_string()>{format!("📁 {}", project.name)}</option>
-                                    }
-                                }
-                            />
-
-                        </select>
-
                         <button
                             class="ib text-xs md:text-sm text-teal-700 dark:text-teal-100 hover:text-teal-600 dark:hover:text-teal-200 
                             px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
                             border border-gray-600 dark:border-gray-500 hover:border-gray-800 dark:hover:border-gray-400 
-                            rounded transition-colors duration-100 flex items-center justify-center"
+                            rounded transition-colors duration-0 flex items-center justify-center"
                             disabled=move || create_thread_action.pending().get()
                             on:click=move |_| {
                                 create_thread_action.dispatch(selected_project.get());
                             }
                         >
 
-                            <Icon icon=icondata::FiPlus width="16" height="16"/>
+                            <Icon
+                                icon=icondata::FiPlus
+                                width="16"
+                                height="16"
+                                style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
+                            />
                             {move || {
                                 if create_thread_action.pending().get() {
                                     if selected_project.get().is_some() {
@@ -199,16 +194,6 @@ pub fn WritersRoom() -> impl IntoView {
                             }}
 
                         </button>
-
-                        <a
-                            href="/draw"
-                            class="ib text-xs md:text-sm text-teal-700 dark:text-teal-100 hover:text-teal-600 dark:hover:text-teal-200 
-                            px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
-                            border border-gray-600 dark:border-gray-500 hover:border-gray-800 dark:hover:border-gray-400 
-                            rounded transition-colors duration-100 flex items-center justify-center"
-                        >
-                            <Icon icon=icondata::FaPenFancySolid width="16" height="16"/>
-                        </a>
 
                         {move || {
                             let term = search_term.get();
@@ -266,7 +251,7 @@ pub fn WritersRoom() -> impl IntoView {
 
             <div class="flex-1 flex flex-row min-h-0 overflow-hidden">
                 <div class=move || {
-                    let base_class = "transition-all duration-100 ease-in-out overflow-hidden border-r border-gray-400 dark:border-teal-700 bg-gray-200 dark:bg-teal-800 flex-shrink-0";
+                    let base_class = "transition-all duration-0 ease-in-out overflow-hidden border-r border-gray-400 dark:border-teal-700 bg-gray-200 dark:bg-teal-800 flex-shrink-0";
                     if show_threads.get() {
                         format!("{base_class} w-80 opacity-100")
                     } else {
@@ -308,7 +293,7 @@ pub fn WritersRoom() -> impl IntoView {
                 <div class=move || {
                     let base_class = "transition-all duration-0 ease-in-out overflow-hidden border-r border-gray-400 dark:border-teal-700 bg-gray-200 dark:bg-teal-800 flex-shrink-0";
                     if show_threads.get() {
-                        format!("{base_class} w-5/12 opacity-100")
+                        format!("{base_class} w-4/12 opacity-100")
                     } else {
                         format!("{base_class} w-0 opacity-0")
                     }

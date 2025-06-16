@@ -8,6 +8,7 @@ use wasm_bindgen::JsCast;
 
 use crate::models::conversations::{MessageView, DisplayMessage, PendingMessage, BranchInfo};
 use crate::components::markdown::MarkdownRenderer;
+use crate::components::ui::{Button, IconButton, ButtonVariant, ButtonSize};
 
 async fn get_messages_query(thread_id: String) -> Result<Vec<MessageView>, String> {
     if thread_id.is_empty() {
@@ -345,27 +346,30 @@ pub fn MessageList(
 
     view! {
         <div class="h-full flex flex-col w-full overflow-hidden">
+
+            // Search Results Header
             <div class="flex-shrink-0 mb-4">
                 {move || {
                     let term = search_term.map(|s| s.get()).unwrap_or_default();
                     let matches = total_matches.get();
                     if !term.is_empty() && matches > 0 {
                         view! {
-                            <div class="mb-3 p-3 bg-mint-100 dark:bg-mint-900 rounded-sm border border-mint-300 dark:border-mint-700">
+                            <div class="card-themed p-3 bg-mint-100 dark:bg-mint-900">
                                 <div class="flex items-center justify-between">
                                     <div class="flex items-center space-x-2">
                                         <span class="text-sm font-medium text-mint-800 dark:text-mint-200">
                                             {format!("\"{}\" - {} matches", term, matches)}
                                         </span>
-                                        <span class="text-xs text-mint-600 dark:text-mint-400">
+                                        <span class="text-xs text-themed-secondary">
                                             {format!("({}/{})", current_match_index.get() + 1, matches)}
                                         </span>
                                     </div>
                                     <div class="flex items-center space-x-1">
-                                        <button
-                                            class="px-2 py-1 text-xs bg-mint-200 dark:bg-mint-800 hover:bg-mint-300 dark:hover:bg-mint-700 
-                                            text-mint-800 dark:text-mint-200 rounded transition-colors"
-                                            on:click=move |_| {
+                                        <IconButton
+                                            variant=ButtonVariant::Ghost
+                                            size=ButtonSize::Small
+                                            disabled=matches == 0
+                                            on_click=Callback::new(move |_| {
                                                 let new_index = if current_match_index.get() == 0 {
                                                     total_matches.get().saturating_sub(1)
                                                 } else {
@@ -373,29 +377,25 @@ pub fn MessageList(
                                                 };
                                                 set_current_match_index.set(new_index);
                                                 navigate_to_match(new_index);
-                                            }
-
-                                            disabled=move || total_matches.get() <= 1
+                                            })
                                         >
-                                            "↓"
-                                        </button>
-                                        <button
-                                            class="px-2 py-1 text-xs bg-mint-200 dark:bg-mint-800 hover:bg-mint-300 dark:hover:bg-mint-700 
-                                            text-mint-800 dark:text-mint-200 rounded transition-colors"
-                                            on:click=move |_| {
+
+                                            <Icon icon=icondata::BsChevronUp width="16" height="16"/>
+                                        </IconButton>
+                                        <IconButton
+                                            variant=ButtonVariant::Ghost
+                                            size=ButtonSize::Small
+                                            disabled=matches == 0
+                                            on_click=Callback::new(move |_| {
                                                 let new_index = (current_match_index.get() + 1)
                                                     % total_matches.get();
                                                 set_current_match_index.set(new_index);
                                                 navigate_to_match(new_index);
-                                            }
-
-                                            disabled=move || total_matches.get() <= 1
+                                            })
                                         >
-                                            "↑"
-                                        </button>
-                                        <span class="text-xs text-mint-600 dark:text-mint-400 ml-2">
-                                            "⌘J/⌘I • F3/⇧F3"
-                                        </span>
+
+                                            <Icon icon=icondata::BsChevronDown width="16" height="16"/>
+                                        </IconButton>
                                     </div>
                                 </div>
                             </div>
@@ -405,9 +405,10 @@ pub fn MessageList(
                         view! { <div></div> }.into_any()
                     }
                 }}
+                // Thread Branches Section
                 <Transition fallback=move || {
                     view! {
-                        <div class="animate-pulse bg-gray-300 dark:bg-teal-600 h-8 rounded-md"></div>
+                        <div class="animate-pulse bg-secondary-200 dark:bg-secondary-600 h-8 rounded-md"></div>
                     }
                 }>
                     {move || {
@@ -418,8 +419,8 @@ pub fn MessageList(
                                     Ok(branches) => {
                                         if !branches.is_empty() {
                                             view! {
-                                                <div class="p-3 bg-gray-200 dark:bg-teal-700 rounded-sm border border-gray-300 dark:border-teal-600">
-                                                    <h4 class="text-sm font-medium text-gray-700 dark:text-gray-200 mb-3">
+                                                <div class="card-themed p-3 mt-3">
+                                                    <h4 class="text-sm font-medium text-themed-primary mb-3">
                                                         "Thread Branches:"
                                                     </h4>
                                                     <div class="flex flex-wrap gap-2">
@@ -429,19 +430,17 @@ pub fn MessageList(
                                                                 let branch_id = branch.thread_id.clone();
                                                                 let is_current = current_thread_id.get() == branch_id;
                                                                 view! {
-                                                                    <button
-                                                                        class=format!(
-                                                                            "px-3 py-1.5 text-xs rounded-md font-medium transition-colors duration-200 {}",
-                                                                            if is_current {
-                                                                                "bg-seafoam-500 text-white shadow-md"
-                                                                            } else {
-                                                                                "bg-white dark:bg-teal-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-teal-500 border border-gray-300 dark:border-teal-500"
-                                                                            },
-                                                                        )
-
-                                                                        on:click=move |_| {
-                                                                            set_current_thread_id.set(branch_id.clone())
+                                                                    <Button
+                                                                        variant=if is_current {
+                                                                            ButtonVariant::Primary
+                                                                        } else {
+                                                                            ButtonVariant::Outline
                                                                         }
+
+                                                                        size=ButtonSize::Small
+                                                                        on_click=Callback::new(move |_| {
+                                                                            set_current_thread_id.set(branch_id.clone())
+                                                                        })
                                                                     >
 
                                                                         <div class="inline-flex items-center gap-1">
@@ -454,7 +453,7 @@ pub fn MessageList(
                                                                             </div>
                                                                             {branch.branch_name.unwrap_or_else(|| "branch".to_string())}
                                                                         </div>
-                                                                    </button>
+                                                                    </Button>
                                                                 }
                                                             })
                                                             .collect_view()}
@@ -475,13 +474,14 @@ pub fn MessageList(
                 </Transition>
             </div>
 
-            <div class="flex-1 overflow-y-auto overflow-x-hidden pr-2 min-w-0 w-full">
+            // Messages Container
+            <div class="flex-1 overflow-y-auto overflow-x-hidden pr-2 min-w-0 w-full scrollbar-themed">
                 <Transition fallback=move || {
                     view! {
                         <div class="space-y-4 w-full overflow-hidden">
-                            <div class="animate-pulse bg-gray-200 dark:bg-teal-800 h-20 rounded-lg"></div>
-                            <div class="animate-pulse bg-gray-200 dark:bg-teal-800 h-20 rounded-lg"></div>
-                            <div class="animate-pulse bg-gray-200 dark:bg-teal-800 h-20 rounded-lg"></div>
+                            <div class="animate-pulse surface-secondary h-20 rounded-lg"></div>
+                            <div class="animate-pulse surface-secondary h-20 rounded-lg"></div>
+                            <div class="animate-pulse surface-secondary h-20 rounded-lg"></div>
                         </div>
                     }
                 }>
@@ -490,8 +490,13 @@ pub fn MessageList(
                         if messages_data.is_empty() {
                             view! {
                                 <div class="flex items-center justify-center h-32">
-                                    <div class="text-center text-gray-500 dark:text-gray-400">
-                                        <div class="text-lg mb-2">"💬"</div>
+                                    <div class="flex flex-col items-center justify-center space-y-4 text-center text-teal-700 dark:text-teal-100 transition-colors duration-0">
+                                        <Icon
+                                            icon=icondata::IoChatbubblesOutline
+                                            width="24"
+                                            height="24"
+                                            style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%)"
+                                        />
                                         <div class="text-sm">
                                             "No messages yet. Start a conversation!"
                                         </div>
@@ -510,147 +515,142 @@ pub fn MessageList(
                                             (message, has_match, _match_index, is_current_match)|
                                         {
                                             let is_user = message.is_user();
-                                            let is_streaming = message.is_streaming();
                                             let search_highlight_term = highlight_term.clone();
                                             let message_id = message.id();
+                                            let message_for_timestamp = message.clone();
+                                            let message_for_content = message.clone();
+                                            let message_for_streaming = message.clone();
                                             view! {
                                                 <div
                                                     id=format!("message-{}", message_id)
                                                     class=format!(
-                                                        "flex w-full min-w-0 {} {}",
-                                                        if is_user { "justify-end" } else { "justify-start" },
-                                                        if is_current_match {
-                                                            "ring-0 ring-mint-500 dark:ring-aqua-700 ring-opacity-100 rounded-sm shadow-lg"
-                                                        } else if has_match {
-                                                            "ring-0 ring-mint-600 dark:ring-aqua-800 ring-opacity-50 rounded-sm"
+                                                        "group relative p-4 rounded-lg transition-all duration-0 {}",
+                                                        if is_user {
+                                                            "justify-end text-gray-800 dark:text-gray-200 ml-8"
                                                         } else {
-                                                            ""
+                                                            "justify-start items-start text-gray-900 dark:text-gray-100 mr-8"
                                                         },
                                                     )
                                                 >
 
-                                                    <div class=format!(
-                                                        "max-w-[80%] min-w-0 rounded-lg p-4 shadow-sm overflow-hidden {} {} {}",
-                                                        if is_user {
-                                                            "bg-seafoam-500 text-white"
-                                                        } else {
-                                                            "bg-white dark:bg-teal-700 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-teal-600"
-                                                        },
-                                                        if is_streaming { "animate-pulse" } else { "" },
-                                                        if is_current_match {
-                                                            "ring-0 ring-mint-500 dark:ring-aqua-700 ring-inset"
-                                                        } else {
-                                                            ""
-                                                        },
-                                                    )>
-
-                                                        {}
-                                                        <div class="prose prose-sm w-full max-w-full overflow-hidden">
-                                                            {if is_user {
-                                                                view! {
-                                                                    <div class="whitespace-pre-wrap text-sm leading-relaxed text-white break-words w-full">
-                                                                        <HighlightedText
-                                                                            text=Cow::from(message.content().to_string())
-                                                                            search_term=search_highlight_term.clone()
-                                                                            class=if is_current_match {
-                                                                                "whitespace-pre-wrap text-sm leading-relaxed text-white break-words w-full bg-white/10 rounded px-1"
-                                                                            } else {
-                                                                                "whitespace-pre-wrap text-sm leading-relaxed text-white break-words w-full"
-                                                                            }
-                                                                        />
-
-                                                                    </div>
-                                                                }
-                                                                    .into_any()
-                                                            } else {
-                                                                view! {
-                                                                    <div class=format!(
-                                                                        "text-sm leading-relaxed text-left w-full max-w-full overflow-hidden {}",
-                                                                        if is_current_match {
-                                                                            "bg-mint-50 dark:bg-mint-900/20 rounded p-2"
-                                                                        } else {
-                                                                            ""
-                                                                        },
-                                                                    )>
-                                                                        {if !search_highlight_term.is_empty() {
-                                                                            view! {
-                                                                                <HighlightedText
-                                                                                    text=Cow::from(message.content().to_string())
-                                                                                    search_term=search_highlight_term.clone()
-                                                                                    class="text-left w-full max-w-full whitespace-pre-wrap text-sm leading-relaxed break-words"
-                                                                                />
-                                                                            }
-                                                                                .into_any()
-                                                                        } else {
-                                                                            view! {
-                                                                                <MarkdownRenderer
-                                                                                    content=message.content().to_string()
-                                                                                    class="text-left w-full max-w-full"
-                                                                                />
-                                                                            }
-                                                                                .into_any()
-                                                                        }}
-
-                                                                    </div>
-                                                                }
-                                                                    .into_any()
-                                                            }}
-
-                                                        </div>
-                                                        {}
-                                                        {move || {
-                                                            if is_user && !is_streaming {
-                                                                if let Some(db_id) = message.db_id() {
+                                                    // Message Header
+                                                    <div class="flex items-start justify-between mb-2">
+                                                        <div class="flex items-center space-x-2">
+                                                            <span class=format!(
+                                                                "text-xs font-medium {}",
+                                                                if is_user {
+                                                                    "text-teal-600 dark:text-teal-400"
+                                                                } else {
+                                                                    "text-mint-800 dark:text-mint-600"
+                                                                },
+                                                            )>{if is_user { "You" } else { "Assistant" }}</span>
+                                                            {move || {
+                                                                if let Some(timestamp) = message_for_timestamp.created_at()
+                                                                {
                                                                     view! {
-                                                                        <div class="mt-3 pt-2 border-t border-white/20">
-                                                                            <button
-                                                                                class="px-3 py-1 text-xs bg-white/20 hover:bg-white/30 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                                                                disabled=move || create_branch_action.pending().get()
-                                                                                on:click=move |_| {
-                                                                                    create_branch_action.dispatch((db_id,));
-                                                                                }
-                                                                            >
-
-                                                                                <div class="inline-flex items-center gap-1">
-                                                                                    <div class="rotate-180-mirror">
-                                                                                        <Icon
-                                                                                            icon=icondata::MdiSourceBranchPlus
-                                                                                            width="16"
-                                                                                            height="16"
-                                                                                        />
-                                                                                    </div>
-                                                                                    {move || {
-                                                                                        if create_branch_action.pending().get() {
-                                                                                            "creating branch..."
-                                                                                        } else {
-                                                                                            ""
-                                                                                        }
-                                                                                    }}
-
-                                                                                </div>
-                                                                            </button>
-                                                                        </div>
+                                                                        <span class="text-xs text-themed-secondary">
+                                                                            {timestamp.format("%H:%M").to_string()}
+                                                                        </span>
                                                                     }
                                                                         .into_any()
                                                                 } else {
-                                                                    view! {
-                                                                        <div class="mt-3">
-                                                                            <span></span>
-                                                                        </div>
-                                                                    }
-                                                                        .into_any()
+                                                                    view! { <span></span> }.into_any()
                                                                 }
+                                                            }}
+
+                                                        </div>
+
+                                                        // Message Actions
+                                                        {move || {
+                                                            if let DisplayMessage::Persisted(msg) = &message {
+                                                                let db_id = msg.id;
+                                                                view! {
+                                                                    <div class="opacity-0 group-hover:opacity-100 transition-opacity duration-0">
+                                                                        <Button
+                                                                            variant=ButtonVariant::Ghost
+                                                                            size=ButtonSize::Small
+                                                                            disabled=create_branch_action.pending().get()
+                                                                            on_click=Callback::new(move |_| {
+                                                                                create_branch_action.dispatch((db_id,));
+                                                                            })
+
+                                                                            class="text-xs"
+                                                                        >
+                                                                            <div class="inline-flex items-center gap-1">
+                                                                                <div class="rotate-180-mirror text-teal-700 dark:text-teal-100">
+                                                                                    <Icon
+                                                                                        icon=icondata::MdiSourceBranchPlus
+                                                                                        width="14"
+                                                                                        height="14"
+                                                                                        style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
+                                                                                    />
+                                                                                </div>
+                                                                                {if create_branch_action.pending().get() {
+                                                                                    "creating..."
+                                                                                } else {
+                                                                                    "branch"
+                                                                                }}
+
+                                                                            </div>
+                                                                        </Button>
+                                                                    </div>
+                                                                }
+                                                                    .into_any()
+                                                            } else {
+                                                                view! { <div></div> }.into_any()
+                                                            }
+                                                        }}
+
+                                                    </div>
+
+                                                    // Message Content
+                                                    <div class="message-container">
+                                                        {move || {
+                                                            if !search_highlight_term.is_empty() && has_match {
+                                                                view! {
+                                                                    <HighlightedText
+                                                                        text=message_for_content.content()
+                                                                        search_term=search_highlight_term.clone()
+                                                                        class="text-gray-800 dark:text-gray-300"
+                                                                        is_current_match=is_current_match
+                                                                    />
+                                                                }
+                                                                    .into_any()
                                                             } else {
                                                                 view! {
-                                                                    <div class="mt-3">
-                                                                        <span></span>
-                                                                    </div>
+                                                                    <MarkdownRenderer
+                                                                        content=message_for_content.content()
+                                                                        class="text-left w-full max-w-full"
+                                                                    />
                                                                 }
                                                                     .into_any()
                                                             }
                                                         }}
 
                                                     </div>
+
+                                                    // Streaming indicator
+                                                    {move || {
+                                                        if message_for_streaming.is_streaming() {
+                                                            view! {
+                                                                <div class="mt-2 flex items-center space-x-1 text-themed-secondary">
+                                                                    <div class="animate-pulse w-2 h-2 bg-current rounded-full"></div>
+                                                                    <div
+                                                                        class="animate-pulse w-2 h-2 bg-current rounded-full"
+                                                                        style="animation-delay: 0.2s"
+                                                                    ></div>
+                                                                    <div
+                                                                        class="animate-pulse w-2 h-2 bg-current rounded-full"
+                                                                        style="animation-delay: 0.4s"
+                                                                    ></div>
+                                                                </div>
+                                                            }
+                                                                .into_any()
+                                                        } else {
+                                                            view! { <div></div> }.into_any()
+                                                        }
+                                                    }}
+
                                                 </div>
                                             }
                                         }
@@ -896,7 +896,7 @@ pub async fn create_branch(
     })
     .await?;
 
-    log::info!("Created branch {} from thread {} at message {}", result, source_thread_id, branch_point_message_id);
+    log::debug!("Created branch {} from thread {} at message {}", result, source_thread_id, branch_point_message_id);
     Ok(result)
 }
 

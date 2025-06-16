@@ -55,3 +55,307 @@ html {
   font-weight: 400;
   font-style: italic;
 }
+
+/* style/components.css - Add this to your style pipeline */
+
+/* CSS Custom Properties for consistent theming */
+:root {
+  /* Primary Colors - Teal family */
+  --primary-50: theme('colors.teal.100');
+  --primary-100: theme('colors.teal.200');
+  --primary-500: theme('colors.teal.500');
+  --primary-600: theme('colors.teal.600');
+  --primary-700: theme('colors.teal.700');
+  --primary-800: theme('colors.teal.800');
+  --primary-900: theme('colors.teal.900');
+
+  /* Secondary Colors - Gray family */
+  --secondary-100: theme('colors.gray.100');
+  --secondary-200: theme('colors.gray.200');
+  --secondary-400: theme('colors.gray.400');
+  --secondary-500: theme('colors.gray.500');
+  --secondary-600: theme('colors.gray.600');
+  --secondary-700: theme('colors.gray.700');
+  --secondary-800: theme('colors.gray.800');
+
+  /* Success Colors - Seafoam family */
+  --success-400: theme('colors.seafoam.400');
+  --success-500: theme('colors.seafoam.500');
+  --success-600: theme('colors.seafoam.600');
+  --success-700: theme('colors.seafoam.700');
+
+  /* Danger Colors - Salmon family */
+  --danger-400: theme('colors.salmon.400');
+  --danger-500: theme('colors.salmon.500');
+  --danger-600: theme('colors.salmon.600');
+  --danger-700: theme('colors.salmon.700');
+
+  /* Surface and background colors */
+  --surface: theme('colors.white');
+  --surface-secondary: theme('colors.gray.100');
+  --surface-tertiary: theme('colors.gray.200');
+  
+  /* Text colors */
+  --text-primary: theme('colors.gray.900');
+  --text-secondary: theme('colors.gray.600');
+  --text-tertiary: theme('colors.gray.400');
+  
+  /* Border colors */
+  --border-primary: theme('colors.gray.200');
+  --border-secondary: theme('colors.gray.300');
+  --border-focus: theme('colors.teal.500');
+}
+
+/* Dark mode overrides */
+.dark {
+  --primary-50: theme('colors.teal.800');
+  --primary-100: theme('colors.teal.700');
+  
+  --surface: theme('colors.teal.800');
+  --surface-secondary: theme('colors.teal.700');
+  --surface-tertiary: theme('colors.teal.600');
+  
+  --text-primary: theme('colors.gray.100');
+  --text-secondary: theme('colors.gray.300');
+  --text-tertiary: theme('colors.gray.400');
+  
+  --border-primary: theme('colors.teal.700');
+  --border-secondary: theme('colors.teal.600');
+  --border-focus: theme('colors.teal.400');
+}
+
+/* Utility classes using CSS variables for consistent theming */
+.surface-primary {
+  background-color: var(--surface);
+  color: var(--text-primary);
+}
+
+.surface-secondary {
+  background-color: var(--surface-secondary);
+  color: var(--text-primary);
+}
+
+.border-themed {
+  border-color: var(--border-primary);
+}
+
+.border-themed-focus {
+  border-color: var(--border-focus);
+}
+
+.text-themed-primary {
+  color: var(--text-primary);
+}
+
+.text-themed-secondary {
+  color: var(--text-secondary);
+}
+
+/* Standard button reset and base styles */
+.btn-base {
+  @apply inline-flex items-center justify-center font-medium rounded transition-all duration-150 focus:outline-none;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.btn-base:disabled {
+  @apply opacity-50 cursor-not-allowed pointer-events-none;
+}
+
+/* Button variants using CSS custom properties */
+.btn-primary {
+  background-color: var(--primary-600);
+  border-color: var(--primary-600);
+  color: theme('colors.white');
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--primary-700);
+  border-color: var(--primary-700);
+}
+
+.btn-primary:focus {
+  @apply ring-2;
+  ring-color: var(--border-focus);
+}
+
+.btn-secondary {
+  background-color: var(--secondary-400);
+  border-color: var(--secondary-400);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--secondary-500);
+  border-color: var(--secondary-500);
+}
+
+.btn-outline {
+  background-color: transparent;
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+  border-width: 2px;
+}
+
+.btn-outline:hover:not(:disabled) {
+  background-color: var(--surface-secondary);
+  border-color: var(--border-secondary);
+}
+
+.btn-ghost {
+  background-color: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background-color: var(--surface-secondary);
+  color: var(--text-primary);
+}
+
+.btn-success {
+  background-color: var(--success-500);
+  border-color: var(--success-500);
+  color: theme('colors.white');
+}
+
+.btn-success:hover:not(:disabled) {
+  background-color: var(--success-600);
+  border-color: var(--success-600);
+}
+
+.btn-danger {
+  background-color: var(--danger-500);
+  border-color: var(--danger-500);
+  color: theme('colors.white');
+}
+
+.btn-danger:hover:not(:disabled) {
+  background-color: var(--danger-600);
+  border-color: var(--danger-600);
+}
+
+/* Button sizes */
+.btn-sm {
+  @apply px-2 py-1 text-sm;
+}
+
+.btn-md {
+  @apply px-3 py-2 text-base;
+}
+
+.btn-lg {
+  @apply px-4 py-3 text-lg;
+}
+
+/* Icon button variants */
+.btn-icon-sm {
+  @apply p-1;
+  aspect-ratio: 1;
+}
+
+.btn-icon-md {
+  @apply p-2;
+  aspect-ratio: 1;
+}
+
+.btn-icon-lg {
+  @apply p-3;
+  aspect-ratio: 1;
+}
+
+/* Form elements theming */
+.input-themed {
+  background-color: var(--surface);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+  @apply border rounded px-3 py-2 transition-all duration-150;
+}
+
+.input-themed:focus {
+  border-color: var(--border-focus);
+  @apply ring-2 ring-opacity-50 outline-none;
+  ring-color: var(--border-focus);
+}
+
+.input-themed::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* Card/Surface theming */
+.card-themed {
+  background-color: var(--surface);
+  border-color: var(--border-primary);
+  @apply border rounded-lg shadow-sm;
+}
+
+.card-hover {
+  @apply transition-all duration-150 hover:shadow-md;
+}
+
+.card-hover:hover {
+  border-color: var(--border-focus);
+}
+
+/* Toast/notification theming */
+.toast-themed {
+  background-color: var(--surface);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+  @apply border rounded shadow-lg;
+}
+
+.toast-success {
+  background-color: var(--success-500);
+  border-color: var(--success-600);
+  color: theme('colors.white');
+}
+
+.toast-danger {
+  background-color: var(--danger-500);
+  border-color: var(--danger-600);
+  color: theme('colors.white');
+}
+
+/* Loading and status indicators */
+.loading-themed {
+  color: var(--text-secondary);
+}
+
+.error-themed {
+  color: var(--danger-500);
+}
+
+.success-themed {
+  color: var(--success-500);
+}
+
+/* Scrollbar theming for dark mode compatibility */
+.scrollbar-themed {
+  scrollbar-width: thin;
+  scrollbar-color: var(--secondary-400) var(--surface);
+}
+
+.scrollbar-themed::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scrollbar-themed::-webkit-scrollbar-track {
+  background: var(--surface);
+}
+
+.scrollbar-themed::-webkit-scrollbar-thumb {
+  background-color: var(--secondary-400);
+  border-radius: 3px;
+}
+
+.scrollbar-themed::-webkit-scrollbar-thumb:hover {
+  background-color: var(--secondary-500);
+}
+
+/* Responsive button adjustments */
+@media (max-width: 640px) {
+  .btn-responsive {
+    @apply w-full justify-center;
+  }
+}

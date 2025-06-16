@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use leptos_fetch::QueryClient;
+use leptos_fetch::{QueryClient, QueryDevtools};
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
     components::{Route, Router, Routes},
@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use crate::auth::auth_components::{AdminLogin, ProtectedAdminPanel};
 use crate::auth::context::AuthProvider;
-use crate::components::drawing::DrawingPage;
 use crate::pages::writersroom::WritersRoom;
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
@@ -47,6 +46,7 @@ pub fn App() -> impl IntoView {
     view! {
         <Stylesheet id="leptos" href="/pkg/l3chat.css"/>
         <Title text="l3chat"/>
+        <QueryDevtools client=client/>
         <AuthProvider>
             <Router>
                 <main>
@@ -54,7 +54,6 @@ pub fn App() -> impl IntoView {
                         <Route path=StaticSegment("") view=WritersRoom/>
                         <Route path=path!("admin") view=AdminLogin/>
                         <Route path=path!("admin-panel") view=ProtectedAdminPanel/>
-                        <Route path=path!("draw") view=DrawingPage/>
                     </Routes>
                 </main>
             </Router>

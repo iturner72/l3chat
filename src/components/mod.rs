@@ -13,3 +13,5 @@ pub mod projects;
 pub mod search;
 pub mod threadlist;
 pub mod toast;
+pub mod ui;
+

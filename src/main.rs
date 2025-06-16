@@ -22,15 +22,12 @@ cfg_if! {
         use l3chat::auth::oauth::{google_login, discord_login, google_callback, discord_callback};
         use l3chat::cancellable_sse::*;
         use l3chat::database::db::establish_connection;
-        use l3chat::handlers::{
-            sse::{
-                create_stream,
-                embeddings_generation_handler,
-                local_embeddings_generation_handler,
-                send_message_stream_handler,
-                title_updates_handler,
-            },
-            drawing_ws::drawing_ws_handler,
+        use l3chat::handlers::sse::{
+            create_stream,
+            embeddings_generation_handler,
+            local_embeddings_generation_handler,
+            send_message_stream_handler,
+            title_updates_handler,
         };
         use std::net::SocketAddr;
         use std::sync::{Arc,Mutex};
@@ -97,7 +94,6 @@ cfg_if! {
                     "/api/{*fn_name}",
                     get(server_fn_handler).post(server_fn_handler),
                 )
-                .route("/ws/drawing", get(drawing_ws_handler))
                 .merge(oauth_routes)
                 .merge(protected_routes)
                 .leptos_routes_with_handler(routes, get(|State(app_state): State<AppState>, request: Request<AxumBody>| async move {

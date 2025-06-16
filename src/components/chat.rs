@@ -19,6 +19,7 @@ cfg_if! {
         use std::env;
         use std::pin::Pin;
         use std::task::{Context, Poll};
+        use serde_json::Value;
         use tokio::sync::mpsc;
         use futures::stream::{Stream, StreamExt};
         use log::debug;
@@ -101,27 +102,36 @@ cfg_if! {
                     .await
                     .map_err(|e| anyhow!("Failed to send message: {}", e))?;
             
-                // Same streaming logic as original send_message method...
                 let mut stream = response.bytes_stream();
-                let re = Regex::new(r#""text":"([^"]*)""#).unwrap();
-                
+
                 while let Some(item) = stream.next().await {
                     match item {
                         Ok(bytes) => {
-                            let event = String::from_utf8(bytes.to_vec()).map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
-                            debug!("Trimmed event: {}", event.trim());
-            
+                            let event = String::from_utf8(bytes.to_vec())
+                                .map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
+                            
+                            debug!("Raw event: {}", event.trim());
+                            
                             for line in event.trim().lines() {
                                 if line.trim() == "event: message_stop" {
                                     debug!("Received message_stop event");
                                     tx.send(Ok(Event::default().data("[DONE]"))).await.ok();
-                                    break;
+                                    return Ok(());
                                 } else if line.trim().starts_with("data: ") {
                                     let json_str = &line.trim()[6..];
-                                    for cap in re.captures_iter(json_str) {
-                                        let content = cap[1].to_string();
-                                        debug!("Extracted content: {content}");
-                                        tx.send(Ok(Event::default().data(content))).await.ok();
+                                    
+                                    if let Ok(parsed) = serde_json::from_str::<Value>(json_str) {
+                                        if let Some(delta) = parsed["delta"].as_object() {
+                                            if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
+                                                debug!("Extracted content: {}", text);
+                                                tx.send(Ok(Event::default().data(text))).await.ok();
+                                            }
+                                        }
+                                    } else {
+                                        if let Some(content) = extract_text_content(json_str) {
+                                            debug!("Fallback extracted content: {}", content);
+                                            tx.send(Ok(Event::default().data(content))).await.ok();
+                                        }
                                     }
                                 }
                             }
@@ -173,24 +183,34 @@ cfg_if! {
 
                 let mut stream = response.bytes_stream();
 
-                let re = Regex::new(r#""text":"([^"]*)""#).unwrap();
                 while let Some(item) = stream.next().await {
                     match item {
                         Ok(bytes) => {
-                            let event = String::from_utf8(bytes.to_vec()).map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
-                            debug!("Trimmed event: {}", event.trim());
-
+                            let event = String::from_utf8(bytes.to_vec())
+                                .map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
+                            
+                            debug!("Raw event: {}", event.trim());
+                            
                             for line in event.trim().lines() {
                                 if line.trim() == "event: message_stop" {
                                     debug!("Received message_stop event");
                                     tx.send(Ok(Event::default().data("[DONE]"))).await.ok();
-                                    break;
+                                    return Ok(());
                                 } else if line.trim().starts_with("data: ") {
                                     let json_str = &line.trim()[6..];
-                                    for cap in re.captures_iter(json_str) {
-                                        let content = cap[1].to_string();
-                                        debug!("Extracted content: {content}");
-                                        tx.send(Ok(Event::default().data(content))).await.ok();
+                                    
+                                    if let Ok(parsed) = serde_json::from_str::<Value>(json_str) {
+                                        if let Some(delta) = parsed["delta"].as_object() {
+                                            if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
+                                                debug!("Extracted content: {}", text);
+                                                tx.send(Ok(Event::default().data(text))).await.ok();
+                                            }
+                                        }
+                                    } else {
+                                        if let Some(content) = extract_text_content(json_str) {
+                                            debug!("Fallback extracted content: {}", content);
+                                            tx.send(Ok(Event::default().data(content))).await.ok();
+                                        }
                                     }
                                 }
                             }
@@ -208,6 +228,44 @@ cfg_if! {
                 Ok(())
             }
         }
+
+        pub fn extract_text_content(json_str: &str) -> Option<String> {
+            // Find "text":" and extract the content between quotes
+            if let Some(start) = json_str.find(r#""text":""#) {
+                let content_start = start + 8; // Length of "text":"
+                if let Some(content_slice) = json_str.get(content_start..) {
+                    // Find the closing quote, handling escaped quotes
+                    let mut chars = content_slice.chars();
+                    let mut result = String::new();
+                    let mut escaped = false;
+                    
+                    while let Some(ch) = chars.next() {
+                        if escaped {
+                            match ch {
+                                'n' => result.push('\n'),
+                                't' => result.push('\t'),
+                                'r' => result.push('\r'),
+                                '\\' => result.push('\\'),
+                                '"' => result.push('"'),
+                                _ => {
+                                    result.push('\\');
+                                    result.push(ch);
+                                }
+                            }
+                            escaped = false;
+                        } else if ch == '\\' {
+                            escaped = true;
+                        } else if ch == '"' {
+                            return Some(result);
+                        } else {
+                            result.push(ch);
+                        }
+                    }
+                }
+            }
+            None
+        }
+
 
         impl OpenAIService {
             pub fn new(model: String) -> Self {
@@ -257,27 +315,40 @@ cfg_if! {
                     .await
                     .map_err(|e| anyhow!("Failed to send message: {}", e))?;
         
-                // Same streaming logic as original send_message method...
                 let mut stream = response.bytes_stream();
-                let re = Regex::new(r#""content":"([^"]*)""#).unwrap();
                 
                 while let Some(item) = stream.next().await {
                     match item {
                         Ok(bytes) => {
-                            let event = String::from_utf8(bytes.to_vec()).map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
-                            debug!("Trimmed event: {}", event.trim());
-        
+                            let event = String::from_utf8(bytes.to_vec())
+                                .map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
+                            
+                            debug!("Raw event: {}", event.trim());
+                            
                             for line in event.trim().lines() {
                                 if line.trim() == "data: [DONE]" {
                                     debug!("Received [DONE] event");
                                     tx.send(Ok(Event::default().data("[DONE]"))).await.ok();
-                                    break;
+                                    return Ok(());
                                 } else if line.trim().starts_with("data: ") {
                                     let json_str = &line.trim()[6..];
-                                    for cap in re.captures_iter(json_str) {
-                                        let content = cap[1].to_string();
-                                        debug!("Extracted content: {content}");
-                                        tx.send(Ok(Event::default().data(content))).await.ok();
+                                    
+                                    if let Ok(parsed) = serde_json::from_str::<Value>(json_str) {
+                                        if let Some(choices) = parsed["choices"].as_array() {
+                                            if let Some(first_choice) = choices.first() {
+                                                if let Some(delta) = first_choice["delta"].as_object() {
+                                                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                                        debug!("Extracted content: {}", content);
+                                                        tx.send(Ok(Event::default().data(content))).await.ok();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        if let Some(content) = extract_content_with_escaping(json_str) {
+                                            debug!("Fallback extracted content: {}", content);
+                                            tx.send(Ok(Event::default().data(content))).await.ok();
+                                        }
                                     }
                                 }
                             }
@@ -293,6 +364,7 @@ cfg_if! {
         
                 debug!("Stream closed");
                 Ok(())
+
             }
 
             pub async fn send_message(
@@ -328,24 +400,38 @@ cfg_if! {
 
                 let mut stream = response.bytes_stream();
 
-                let re = Regex::new(r#""content":"([^"]*)""#).unwrap();
                 while let Some(item) = stream.next().await {
                     match item {
                         Ok(bytes) => {
-                            let event = String::from_utf8(bytes.to_vec()).map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
-                            debug!("Trimmed event: {}", event.trim());
-
+                            let event = String::from_utf8(bytes.to_vec())
+                                .map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
+                            
+                            debug!("Raw event: {}", event.trim());
                             for line in event.trim().lines() {
                                 if line.trim() == "data: [DONE]" {
                                     debug!("Received [DONE] event");
                                     tx.send(Ok(Event::default().data("[DONE]"))).await.ok();
-                                    break;
+                                    return Ok(());
                                 } else if line.trim().starts_with("data: ") {
                                     let json_str = &line.trim()[6..];
-                                    for cap in re.captures_iter(json_str) {
-                                        let content = cap[1].to_string();
-                                        debug!("Extracted content: {content}");
-                                        tx.send(Ok(Event::default().data(content))).await.ok();
+                                    
+                                    // Parse the JSON properly instead of using regex
+                                    if let Ok(parsed) = serde_json::from_str::<Value>(json_str) {
+                                        if let Some(choices) = parsed["choices"].as_array() {
+                                            if let Some(first_choice) = choices.first() {
+                                                if let Some(delta) = first_choice["delta"].as_object() {
+                                                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                                        debug!("Extracted content: {}", content);
+                                                        tx.send(Ok(Event::default().data(content))).await.ok();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        if let Some(content) = extract_content_with_escaping(json_str) {
+                                            debug!("Fallback extracted content: {}", content);
+                                            tx.send(Ok(Event::default().data(content))).await.ok();
+                                        }
                                     }
                                 }
                             }
@@ -362,6 +448,30 @@ cfg_if! {
                 debug!("Stream closed");
                 Ok(())
             }
+        }
+
+        /// Fallback function to extract content with proper escape handling
+        fn extract_content_with_escaping(json_str: &str) -> Option<String> {
+            // More sophisticated regex that handles escaped quotes
+            let re = Regex::new(r#""content":"((?:[^"\\]|\\.)*)""#).unwrap();
+            
+            if let Some(captures) = re.captures(json_str) {
+                if let Some(content_match) = captures.get(1) {
+                    let content = content_match.as_str();
+                    
+                    // Unescape the JSON string
+                    let unescaped = content
+                        .replace("\\\"", "\"")
+                        .replace("\\\\", "\\")
+                        .replace("\\n", "\n")
+                        .replace("\\r", "\r")
+                        .replace("\\t", "\t");
+                        
+                    return Some(unescaped);
+                }
+            }
+            
+            None
         }
 
         pub async fn fetch_message_history(thread_id: &str, pool: &DbPool) -> Result<Vec<Message>, Error> {
@@ -634,8 +744,7 @@ pub fn Chat(
         						event_source.close();
         					} else {
                                 // 6. Stream tokens into pending message
-                                let processed_data = data.replace("\\n", "\n");
-                                accumulated_content.push_str(&processed_data);
+                                accumulated_content.push_str(&data);
                                 
                                 // Update pending message content
                                 if let Some(set_pending) = pending_messages {
@@ -686,92 +795,97 @@ pub fn Chat(
     };
 
     view! {
-        <div class="flex flex-col space-y-4">
-            <div class="flex flex-col space-y-3">
-                <div class="flex justify-center">
-                    <select
-                        class="ib text-xs md:text-sm px-3 py-2 rounded-md
-                        text-gray-900 dark:text-gray-100 
-                        bg-white dark:bg-teal-700 
-                        border border-gray-400 dark:border-teal-600
-                        hover:border-gray-600 dark:hover:border-teal-400
-                        focus:border-seafoam-500 dark:focus:border-aqua-400 focus:outline-none
-                        transition duration-200 ease-in-out"
-                        on:change=handle_model_change
-                        prop:value=move || model.get()
-                    >
-                        <option value="claude-3-haiku-20240307">"claude-3-haiku"</option>
-                        <option value="claude-3-sonnet-20240229">"claude-3-sonnet"</option>
-                        <option value="claude-3-opus-20240229">"claude-3-opus"</option>
-                        <option value="claude-3-5-sonnet-20240620">"claude-3-5-sonnet"</option>
-                        <option value="gpt-4o-mini">"gpt-4o-mini"</option>
-                        <option value="gpt-4o">"gpt-4o"</option>
-                        <option value="gpt-4-turbo">"gpt-4-turbo"</option>
-                    </select>
-                </div>
-
-                <div class="flex space-x-3">
-                    <textarea
-                        class="ir text-sm flex-1 p-3 rounded-lg resize-none min-h-[2.5rem] max-h-32
-                        text-gray-800 dark:text-gray-200 
-                        bg-white dark:bg-teal-700 
-                        border border-gray-400 dark:border-teal-600
-                        focus:border-seafoam-500 dark:focus:border-aqua-400 focus:outline-none focus:ring-2 focus:ring-seafoam-500/20
-                        placeholder-gray-500 dark:placeholder-gray-400
-                        transition duration-200 ease-in-out"
-                        placeholder="Type your message..."
-                        prop:value=message
-                        on:input=move |event| {
-                            set_message(event_target_value(&event));
-                            let target = event.target().unwrap();
-                            let style = target.unchecked_ref::<HtmlElement>().style();
-                            style.set_property("height", "auto").unwrap();
-                            style
-                                .set_property(
-                                    "height",
-                                    &format!(
-                                        "{}px",
-                                        target.unchecked_ref::<HtmlElement>().scroll_height(),
-                                    ),
-                                )
-                                .unwrap();
-                        }
-                        on:keydown=move |event| {
-                            if event.key() == "Enter" && !event.shift_key() {
-                                event.prevent_default();
-                                if !message.get().trim().is_empty() && !is_sending.get() {
-                                    send_message();
-                                }
+        <div class="flex flex-col space-y-3 pl-3 pr-3 bg-white dark:bg-teal-800 border-gray-300 dark:border-teal-600">
+            <div class="flex space-x-3">
+                <textarea
+                    class="flex-1 pt-3 pl-3 rounded-lg resize-none min-h-[2.5rem] max-h-32
+                    text-gray-800 dark:text-gray-200 
+                    bg-gray-100 dark:bg-teal-700 
+                    border border-gray-400 dark:border-teal-600
+                    focus:border-seafoam-500 dark:focus:border-mint-400 focus:outline-none focus:ring-2 focus:ring-seafoam-500/20 dark:focus:ring-mint-400/20
+                    placeholder-gray-500 dark:placeholder-gray-400
+                    transition duration-0 ease-in-out"
+                    placeholder="Type your message..."
+                    prop:value=message
+                    on:input=move |event| {
+                        set_message(event_target_value(&event));
+                        let target = event.target().unwrap();
+                        let style = target.unchecked_ref::<HtmlElement>().style();
+                        style.set_property("height", "auto").unwrap();
+                        style
+                            .set_property(
+                                "height",
+                                &format!(
+                                    "{}px",
+                                    target.unchecked_ref::<HtmlElement>().scroll_height(),
+                                ),
+                            )
+                            .unwrap();
+                    }
+                    on:keydown=move |event| {
+                        if event.key() == "Enter" && !event.shift_key() {
+                            event.prevent_default();
+                            if !message.get().trim().is_empty() && !is_sending.get() {
+                                send_message();
                             }
                         }
-                    >
-                    </textarea>
-                    <button
-                        class="ib px-6 py-3 rounded-lg font-medium
-                        text-white transition duration-200 ease-in-out
-                        disabled:cursor-not-allowed disabled:opacity-50
-                        focus:outline-none focus:ring-2 focus:ring-offset-2"
-                        class:bg-seafoam-600=move || !is_sending.get()
-                        class:hover:bg-seafoam-700=move || !is_sending.get()
-                        class:focus:ring-seafoam-500=move || !is_sending.get()
-                        class:dark:bg-teal-600=move || !is_sending.get()
-                        class:dark:hover:bg-teal-700=move || !is_sending.get()
-                        class:bg-gray-400=move || is_sending.get()
-                        class:dark:bg-gray-600=move || is_sending.get()
-                        on:click=send_message_action
-                        disabled=move || is_sending.get() || message.get().trim().is_empty()
-                    >
-                        {move || if is_sending.get() { "yapping..." } else { "yap" }}
-                    </button>
+                    }
+                >
+                </textarea>
+                <button
+                    class="ib px-6 rounded-lg font-medium
+                    text-white transition duration-200 ease-in-out
+                    disabled:cursor-not-allowed disabled:opacity-50
+                    focus:outline-none focus:ring-2 focus:ring-offset-2"
+                    class:bg-seafoam-600=move || !is_sending.get()
+                    class:hover:bg-seafoam-700=move || !is_sending.get()
+                    class:focus:ring-seafoam-500=move || !is_sending.get()
+                    class:dark:bg-teal-600=move || !is_sending.get()
+                    class:dark:hover:bg-teal-700=move || !is_sending.get()
+                    class:bg-gray-400=move || is_sending.get()
+                    class:dark:bg-gray-600=move || is_sending.get()
+                    on:click=send_message_action
+                    disabled=move || is_sending.get() || message.get().trim().is_empty()
+                >
+                    {move || if is_sending.get() { "yapping..." } else { "yap" }}
+                </button>
+            </div>
+
+            // Bottom row with model selector on left and instructions centered
+            <div class="flex items-center justify-between">
+                <select
+                    class="text-xs px-3 py-2 rounded-md
+                    text-gray-700 dark:text-gray-300 
+                    bg-gray-100 dark:bg-teal-700 
+                    border border-gray-400 dark:border-teal-600
+                    hover:border-gray-600 dark:hover:border-teal-400
+                    focus:border-seafoam-500 dark:focus:border-mint-400 focus:outline-none
+                    transition duration-200 ease-in-out"
+                    on:change=handle_model_change
+                    prop:value=move || model.get()
+                >
+                    <option value="claude-3-haiku-20240307">"claude-3-haiku"</option>
+                    <option value="claude-3-sonnet-20240229">"claude-3-sonnet"</option>
+                    <option value="claude-3-opus-20240229">"claude-3-opus"</option>
+                    <option value="claude-3-5-sonnet-20240620">"claude-3-5-sonnet"</option>
+                    <option value="gpt-4o-mini">"gpt-4o-mini"</option>
+                    <option value="gpt-4o">"gpt-4o"</option>
+                    <option value="gpt-4-turbo">"gpt-4-turbo"</option>
+                </select>
+
+                <div class="flex-1 text-center">
+                    <div class="text-xs text-gray-500 dark:text-gray-400">
+                        "Press Enter to send • Shift+Enter for new line"
+                    </div>
                 </div>
 
-                <div class="text-xs text-gray-500 dark:text-gray-400 text-center">
-                    "Press Enter to send • Shift+Enter for new line"
-                </div>
+                // Empty div to balance the layout (keeps the text centered)
+                <div class="w-[120px]"></div>
             </div>
         </div>
     }
 }
+
 
 #[server(CreateMessage, "/api")]
 pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> Result<(), ServerFnError> {

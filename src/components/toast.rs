@@ -1,4 +1,6 @@
+use crate::components::ui::{ButtonVariant, IconButton};
 use leptos::prelude::*;
+use leptos_icons::Icon;
 
 #[component]
 pub fn Toast(
@@ -17,17 +19,28 @@ pub fn Toast(
     view! {
         <div class=move || {
             format!(
-                "{} fixed bottom-4 right-4 bg-gray-100 dark:bg-rich-black-500 text-teal-500 dark:text-mint-300 px-4 py-2 rounded shadow-lg transition-opacity duration-300",
+                "{} fixed bottom-4 right-4 bg-gray-100 dark:bg-teal-800 text-mint-800 dark:text-mint-600 px-4 py-2 rounded shadow-lg transition-opacity duration-0",
                 opacity_class(),
             )
         }>
-            {message}
-            <button
-                class="ml-2 text-salmon-600 hover:text-salmon-700 dark:text-salmon-700 dark:hover:text-salmon-800"
-                on:click=move |_| on_close.run(())
-            >
-                "×"
-            </button>
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-themed-primary">{message}</span>
+                <IconButton
+                    variant=ButtonVariant::Ghost
+                    size=crate::components::ui::ButtonSize::Small
+                    on_click=Callback::new(move |_| on_close.run(()))
+                    class="ml-2 text-danger-500 hover:text-danger-600"
+                >
+                    {move || {
+                        if visible.get() {
+                            view! { <Icon icon=icondata::BsXCircle width="16" height="16"/> }
+                        } else {
+                            view! { <Icon icon=icondata::BsXCircle width="16" height="16"/> }
+                        }
+                    }}
+
+                </IconButton>
+            </div>
         </div>
     }
 }

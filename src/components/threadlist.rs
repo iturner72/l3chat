@@ -7,6 +7,7 @@ use cfg_if::cfg_if;
 
 use crate::auth::{context::AuthContext, get_current_user};
 use crate::models::conversations::ThreadView;
+use crate::components::ui::{Button, IconButton, ButtonVariant, ButtonSize};
 
 pub async fn get_threads_query() -> Result<Vec<ThreadView>, String> {
     get_threads().await.map_err(|e| e.to_string())
@@ -30,14 +31,71 @@ pub fn ThreadList(
     let client: QueryClient = expect_context();
     let (search_query, set_search_query) = signal(String::new());
     let (is_search_focused, set_is_search_focused) = signal(false);
-    let (title_updates, _set_title_updates) = signal(std::collections::HashMap::<String, String>::new());
+    let (_title_updates, _set_title_updates) = signal(std::collections::HashMap::<String, String>::new());
     let (_sse_connected, _set_sse_connected) = signal(false);
+    let (hotkey_text, set_hotkey_text) = signal("Ctrl+K");
 
     // Node ref for the search input
     let search_input_ref = NodeRef::<leptos::html::Input>::new();
 
+    // Set up SSE connection for title updates
+    cfg_if! {
+        if #[cfg(feature = "hydrate")] {
+            Effect::new(move |_| {
+                use wasm_bindgen_futures::spawn_local;
+                use web_sys::{EventSource, MessageEvent, ErrorEvent};
+                use wasm_bindgen::{prelude::*, JsCast};
+                use crate::types::TitleUpdate;
+
+                spawn_local(async move {
+                    log::debug!("Setting up SSE connection for title updates");
+                    
+                    match EventSource::new("/api/title-updates") {
+                        Ok(event_source) => {
+                            _set_sse_connected.set(true);
+                            
+                            let onmessage_callback = Closure::wrap(Box::new(move |e: MessageEvent| {
+                                if let Some(data) = e.data().as_string() {
+                                    log::debug!("Received SSE message: {}", data);
+                                    
+                                    if let Ok(title_update) = serde_json::from_str::<TitleUpdate>(&data) {
+                                        _set_title_updates.update(|updates| {
+                                            updates.insert(title_update.thread_id.clone(), title_update.title.clone());
+                                        });
+                                    }
+                                }
+                            }) as Box<dyn FnMut(_)>);
+                            
+                            event_source.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
+                            onmessage_callback.forget();
+                            
+                            let onerror_callback = Closure::wrap(Box::new(move |_: ErrorEvent| {
+                                log::error!("SSE connection error for title updates");
+                                _set_sse_connected.set(false);
+                            }) as Box<dyn FnMut(_)>);
+                            
+                            event_source.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
+                            onerror_callback.forget();
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create EventSource: {:?}", e);
+                        }
+                    }
+                });
+            });
+        }
+    }
+
     let threads_resource = client.resource(get_threads_query, || ());
     let search_resource = client.resource(search_threads_query, move || search_query.get());
+
+    let current_threads = move || {
+        if search_query.get().is_empty() {
+            threads_resource.get()
+        } else {
+            search_resource.get()
+        }
+    };
 
     let handle_search = move |ev: Event| {
         let query = event_target_value(&ev);
@@ -96,7 +154,21 @@ pub fn ThreadList(
         set_is_search_focused.set(false);
     };
 
-    // Global keyboard listener - only on client side
+    // find user agent on mount
+    Effect::new(move |_| {
+        if let Some(window) = web_sys::window() {
+            if let Ok(ua) = window.navigator().user_agent() {
+                let text = if ua.to_lowercase().contains("mac") { 
+                    "⌘K" 
+                } else { 
+                    "Ctrl+K" 
+                };
+                set_hotkey_text.set(text);
+            }
+        }
+    });
+
+    // Global keyboard listener for Cmd+K / Ctrl+K
     cfg_if! {
         if #[cfg(feature = "hydrate")] {
             use wasm_bindgen::{closure::Closure, JsCast};
@@ -160,7 +232,7 @@ pub fn ThreadList(
                     client.invalidate_query(get_threads_query, ());
                     client.invalidate_query(search_threads_query, search_query.get_untracked());
 
-                    if current_id.to_string() == thread_id {
+                    if current_id == thread_id {
                         match get_threads().await {
                             Ok(updated_threads) => {
                                 if let Some(next_thread) = updated_threads.first() {
@@ -183,149 +255,39 @@ pub fn ThreadList(
         }
     });
 
-    let current_threads = move || {
-        if search_query.get().is_empty() {
-            threads_resource.get()
-        } else {
-            search_resource.get()
-        }
-    };
-
-    // Platform detection - only on client side
-    let get_hotkey_text = move || {
-        cfg_if! {
-            if #[cfg(feature = "hydrate")] {
-                web_sys::window()
-                    .and_then(|w| w.navigator().user_agent().ok())
-                    .map(|ua| if ua.to_lowercase().contains("mac") { "⌘K" } else { "Ctrl+K" })
-                    .unwrap_or("Ctrl+K")
-            } else {
-                "Ctrl+K" // Default for SSR
-            }
-        }
-    };
-
-    cfg_if::cfg_if! {
-        if #[cfg(feature = "hydrate")] {
-            use leptos::task::spawn_local;
-            spawn_local(async move {
-                use std::rc::Rc;
-                use wasm_bindgen::closure::Closure;
-                use wasm_bindgen::JsCast;
-                use web_sys::{EventSource, MessageEvent, ErrorEvent};
-
-                let event_source = Rc::new(
-                    EventSource::new("/api/title-updates")
-                        .expect("Failed to connect to title updates")
-                );
-
-                let on_open = {
-                    Closure::wrap(Box::new(move |_: web_sys::Event| {
-                        _set_sse_connected.set(true);
-                    }) as Box<dyn FnMut(_)>)
-                };
-
-                let on_message = {
-                    Closure::wrap(Box::new(move |event: MessageEvent| {
-                        if let Some(data) = event.data().as_string() {
-                            if let Ok(update) = serde_json::from_str::<crate::types::TitleUpdate>(&data) {
-                                _set_title_updates.update(|updates| {
-                                    updates.insert(update.thread_id.clone(), update.title.clone());
-                                });
-                                
-                                if update.status == "completed" {
-                                    set_timeout(
-                                        move || {
-                                            client.invalidate_query(get_threads_query, ());
-                                        },
-                                        std::time::Duration::from_millis(500)
-                                    );
-                                }
-                            }
-                        }
-                    }) as Box<dyn FnMut(_)>)
-                };
-
-                let on_error = {
-                    Closure::wrap(Box::new(move |_: ErrorEvent| {
-                        _set_sse_connected.set(false);
-                    }) as Box<dyn FnMut(_)>)
-                };
-
-                event_source.set_onopen(Some(on_open.as_ref().unchecked_ref()));
-                event_source.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-                event_source.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-
-                on_open.forget();
-                on_message.forget();
-                on_error.forget();
-            });
-        }
-    }
-    
-    log::debug!("SSE RenderEffect created successfully");
-
     view! {
-        <div class="thread-list-container flex flex-col h-full">
-            <div class="flex-shrink-0">
-                <div class="relative flex items-center w-full">
-                    <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        class="h-5 w-5 absolute left-3 text-gray-400 dark:text-teal-500"
-                        viewBox="0 1 20 20"
-                        fill="currentColor"
-                    >
-                        <path
-                            fill-rule="evenodd"
-                            d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
-                            clip-rule="evenodd"
-                        ></path>
-                    </svg>
-
+        <div class="h-full flex flex-col surface-primary border-themed">
+            <div class="flex-shrink-0 p-4 border-b border-themed">
+                <div class="relative">
                     <input
                         node_ref=search_input_ref
                         type="text"
-                        placeholder="grep your threads"
+                        placeholder="grep threads..."
+                        class="input-themed w-full pr-16"
+                        prop:value=move || search_query.get()
                         on:input=handle_search
                         on:keydown=handle_search_keydown
                         on:focus=handle_focus
                         on:blur=handle_blur
-                        prop:value=search_query
-                        class=move || {
-                            format!(
-                                "grep-box w-full pl-10 pr-16 p-2 mb-2 bg-gray-100 dark:bg-teal-800 text-teal-600 dark:text-mint-400
-                            border-0 transition duration-0 ease-in-out {}",
-                                if is_search_focused.get() {
-                                    "border-teal-500 dark:border-mint-300 ring-2 ring-teal-500/20 dark:ring-mint-300/20 shadow-md"
-                                } else {
-                                    "border-gray-300 dark:border-teal-600 focus:border-teal-500 dark:focus:border-mint-300 focus:outline-none focus:ring-2 focus:ring-teal-500/20 dark:focus:ring-mint-300/20"
-                                },
-                            )
-                        }
                     />
-
-                    <div class="absolute right-3 flex items-center">
-                        <span class=move || {
-                            format!(
-                                "text-xs font-mono px-1.5 py-0.5 rounded border transition-colors duration-0 {}",
-                                if is_search_focused.get() {
-                                    "text-teal-600 dark:text-mint-300 bg-teal-100 dark:bg-teal-600 border-teal-300 dark:border-mint-400"
-                                } else {
-                                    "text-gray-400 dark:text-teal-500 bg-gray-200 dark:bg-teal-700 border-gray-300 dark:border-teal-600"
-                                },
-                            )
-                        }>{get_hotkey_text}</span>
+                    <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                        <span class=format!(
+                            "text-xs font-mono px-1.5 py-0.5 rounded border transition-colors duration-150 {}",
+                            if is_search_focused.get() {
+                                "text-primary-600 bg-primary-50 border-primary-300"
+                            } else {
+                                "text-themed-secondary bg-surface-secondary border-themed"
+                            },
+                        )>{hotkey_text}</span>
                     </div>
                 </div>
             </div>
 
-            <div class="flex-1 overflow-y-auto">
+            <div class="flex-1 overflow-y-auto scrollbar-themed">
                 <Transition fallback=move || {
                     view! {
-                        <div class="w-full">
-                            <p class="text-gray-500 dark:text-gray-400 text-sm">
-                                "Loading threads..."
-                            </p>
+                        <div class="p-4">
+                            <p class="text-themed-secondary text-sm">"Loading threads..."</p>
                         </div>
                     }
                 }>
@@ -334,8 +296,8 @@ pub fn ThreadList(
                             Some(Ok(thread_list)) => {
                                 if thread_list.is_empty() {
                                     view! {
-                                        <div class="w-full">
-                                            <p class="text-gray-500 dark:text-gray-400 text-sm">
+                                        <div class="p-4">
+                                            <p class="text-themed-secondary text-sm">
                                                 "No threads found"
                                             </p>
                                         </div>
@@ -344,30 +306,33 @@ pub fn ThreadList(
                                 } else {
                                     let tree_nodes = build_thread_tree(thread_list);
                                     view! {
-                                        <For
-                                            each=move || tree_nodes.clone()
-                                            key=|root_node| root_node.thread.id.clone()
-                                            children=move |root_node| {
-                                                view! {
-                                                    <ThreadTreeNode
-                                                        node=root_node
-                                                        current_thread_id=current_thread_id
-                                                        set_current_thread_id=set_current_thread_id
-                                                        delete_action=delete_thread_action
-                                                        depth=0
-                                                        title_updates=title_updates
-                                                    />
+                                        <div class="p-2">
+                                            <For
+                                                each=move || tree_nodes.clone()
+                                                key=|root_node| root_node.thread.id.clone()
+                                                children=move |root_node| {
+                                                    view! {
+                                                        <ThreadTreeNode
+                                                            node=root_node
+                                                            current_thread_id=current_thread_id
+                                                            set_current_thread_id=set_current_thread_id
+                                                            delete_action=delete_thread_action
+                                                            depth=0
+                                                            title_updates=_title_updates
+                                                        />
+                                                    }
                                                 }
-                                            }
-                                        />
+                                            />
+
+                                        </div>
                                     }
                                         .into_any()
                                 }
                             }
                             Some(Err(e)) => {
                                 view! {
-                                    <div class="w-full">
-                                        <div class="text-salmon-500 text-sm">
+                                    <div class="p-4">
+                                        <div class="error-themed text-sm">
                                             "Error loading threads: " {e}
                                         </div>
                                     </div>
@@ -406,298 +371,430 @@ fn ThreadTreeNode(
     let thread_for_display = thread.clone();
     let thread_for_generation = thread.clone();
     let thread_for_styles = thread.clone();
+    let thread_for_title_display = thread.clone();
     
     // Calculate indentation based on depth
     let margin_left = format!("{}rem", depth as f32 * 1.5);
     
     // Use a memo for the active state to make it reactive properly
-    let is_active = Memo::new(move |_| current_thread_id.get().to_string() == thread_id_for_memo);
+    let is_active = Memo::new(move |_| current_thread_id.get() == thread_id_for_memo);
     
-    // Determine styling based on whether it's a main thread or branch AND if it's active
-    let get_styles = move || {
-        let active = is_active.get();
-        let is_branch = thread_for_styles.parent_thread_id.is_some();
-        let is_project = thread_for_styles.project_id.is_some();
-        
-        if is_branch {
-            // This is a branch - use branch icon
-            if active {
-                (
-                    view! {
-                        <div class="rotate-180-mirror">
-                            <Icon icon=icondata::MdiSourceBranch width="16" height="16"/>
-                        </div>
-                    }.into_any(),
-                    "border-seafoam-500 bg-seafoam-600 dark:bg-seafoam-700",
-                    "ir text-sm text-white group-hover:text-white",
-                )
-            } else {
-                (
-                    view! {
-                        <div class="rotate-180-mirror">
-                            <Icon icon=icondata::MdiSourceBranch width="16" height="16"/>
-                        </div>
-                    }.into_any(),
-                    "border-gray-600 bg-gray-200 dark:bg-teal-700 hover:border-seafoam-600 hover:bg-gray-300 dark:hover:bg-teal-600",
-                    "ir text-sm text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-white",
-                )
-            }
-        } else if is_project {
-            if active {
-                (
-                    view! { <span class="text-blue-200">{"📁"}</span> }.into_any(),
-                    "border-seafoam-500 bg-seafoam-600 dark:bg-seafoam-700",
-                    "ir text-sm text-gray-500 group-hover:text-gray-700",
-                )
-            } else {
-                (
-                    view! { <span class="text-blue-600 dark:text-blue-400">{"📁"}</span> }.into_any(),
-                    "border-seafoam-700 bg-gray-300 dark:bg-teal-800 hover:border-seafoam-800 hover:bg-gray-400 dark:hover:bg-gray-700",
-                    "ir text-sm text-gray-700 group-hover:text-gray-500 dark:text-gray-100 dark:group-hover:text-gray-500",
-                )
-            }
-        } else {
-            // This is a main thread - no icon
-            if active {
-                (
-                    view! { <span></span> }.into_any(),
-                    "border-teal-500 bg-teal-600 dark:bg-teal-700",
-                    "ir text-sm text-white group-hover:text-white",
-                )
-            } else {
-                (
-                    view! { <span></span> }.into_any(),
-                    "border-teal-700 bg-gray-300 dark:bg-teal-800 hover:border-teal-800 hover:bg-gray-400 dark:hover:bg-gray-700",
-                    "ir text-sm text-gray-700 group-hover:text-white dark:text-gray-100 dark:group-hover:text-white",
-                )
-            }
-        }
-    };
-
-    let display_name = Memo::new(move |_| {
-        let updates = title_updates.get();
-        let thread = &thread_for_display;
-        
-        // Check for live updates FIRST
-        if let Some(live_title) = updates.get(&thread.id) {
-            return live_title.clone();
-        }
-        
-        // Check for branch naming
-        if let Some(branch_name) = &thread.branch_name {
-            format!("branch {branch_name}")
-        } else if thread.parent_thread_id.is_some() {
-            "branch".to_string()
-        } else {
-            // Root thread logic
-            let base_title = if let Some(title) = &thread.title {
-                if !title.trim().is_empty() {
-                    title.clone()
-                } else {
-                    if thread.id.len() > 24 {
-                        format!("{}...", &thread.id[..24])
-                    } else {
-                        thread.id.clone()
-                    }
-                }
-            } else {
-                if thread.id.len() > 24 {
-                    format!("{}...", &thread.id[..24])
-                } else {
-                    thread.id.clone()
-                }
-            };
-    
-            // For project threads, show project name in the title
-            if let Some(project_name) = &thread.project_name {
-                // Truncate project name if too long
-                let truncated_project = if project_name.len() > 15 {
-                    format!("{}...", &project_name[..12])
-                } else {
-                    project_name.clone()
-                };
-                
-                // Show just the project name for cleaner look since we have the folder icon
-                truncated_project
-            } else {
-                base_title
-            }
-        }
-    });
-
+    // Check if title is being generated
     let is_generating_title = Memo::new(move |_| {
         let updates = title_updates.get();
-        let thread_id = &thread_for_generation.id;
+        let thread_id = thread_for_generation.id.as_str();
         
-        log::debug!("Checking if thread {thread_id} is generating title");
+        log::debug!("Checking if thread {} is generating title", thread_id);
         
-        let x = if let Some(title) = updates.get(thread_id) {
+        if let Some(title) = updates.get(thread_id) {
             let is_generating = title.contains("Generating") || title.contains("...");
-            log::debug!("Current title: '{title:?}', is_generating: {is_generating:?}");
+            log::debug!("Current title: '{}', is_generating: {}", title, is_generating);
             is_generating
         } else {
             log::debug!("No title update found for thread");
             false
-        };
+        }
+    });
 
-        x 
+    // Get display title with SSE updates
+    let display_title = Memo::new(move |_| {
+        let updates = title_updates.get();
+        let thread_id = thread_for_title_display.id.as_str();
+        
+        // Check if we have a live title update
+        if let Some(updated_title) = updates.get(thread_id) {
+            // Don't show "Generating..." messages as the actual title
+            if updated_title.contains("Generating") {
+                thread_for_title_display.title.clone().unwrap_or_else(|| "New Thread".to_string())
+            } else {
+                updated_title.clone()
+            }
+        } else {
+            thread_for_title_display.title.clone().unwrap_or_else(|| "New Thread".to_string())
+        }
+    });
+
+    // Determine thread type and styling
+    let thread_type = Memo::new(move |_| {
+        let is_branch = thread_for_styles.parent_thread_id.is_some();
+        let is_project = thread_for_styles.project_id.is_some();
+        
+        if is_branch {
+            ThreadType::Branch
+        } else if is_project {
+            ThreadType::Project
+        } else {
+            ThreadType::Main
+        }
     });
 
     let has_children = !node.children.is_empty();
     let children_for_each = node.children.clone();
     let children_for_last_check = node.children.clone();
 
-    view! {
-        <div class="thread-group mb-1">
-            <div class="thread-item-container flex flex-col relative">
-                {move || {
-                    if depth > 0 {
-                        view! {
-                            <div class="absolute left-0 top-0 w-full h-full pointer-events-none">
-                                <div
-                                    class="absolute border-l-2 border-gray-400 dark:border-gray-600"
-                                    style:left=format!("{}rem", (depth as f32 - 1.0) * 1.5 + 0.75)
-                                    style:top="0"
-                                    style:height=if is_last_child { "1.5rem" } else { "100%" }
-                                ></div>
-
-                                <div
-                                    class="absolute border-t-2 border-gray-400 dark:border-gray-600"
-                                    style:left=format!("{}rem", (depth as f32 - 1.0) * 1.5 + 0.75)
-                                    style:top="1.5rem"
-                                    style:width="0.75rem"
-                                ></div>
-                            </div>
-                        }
-                            .into_any()
-                    } else {
-                        view! { <div></div> }.into_any()
-                    }
-                }}
-                <div
-                    class="flex w-full justify-between items-center relative z-10"
-                    style:margin-left=margin_left
-                >
-                    {move || {
-                        let (icon, button_class, text_class) = get_styles();
-                        let thread_id_for_click = thread_id_for_set.clone();
-                        let is_generating = is_generating_title.get();
-                        view! {
-                            <button
-                                class=format!(
-                                    "thread-item w-full p-2 border-0 {} rounded-md transition duration-0 ease-in-out group text-sm relative {}",
-                                    button_class,
-                                    if is_generating { "animate-pulse" } else { "" },
-                                )
-
-                                on:click=move |_| {
-                                    log::debug!("Clicked thread: {thread_id_for_click}");
-                                    set_current_thread_id.run(thread_id_for_click.clone());
-                                }
-                            >
-
-                                <div class="flex items-center">
-                                    <span class="mr-2">{icon}</span>
-                                    <div class="flex items-center space-x-2 flex-1 min-w-0">
-                                        <p class=format!(
-                                            "thread-name {} transition duration-0 ease-in-out truncate flex-1 text-left",
-                                            text_class,
-                                        )>{move || display_name.get()}</p>
-                                        {move || {
-                                            if is_generating {
-                                                view! {
-                                                    <div class="flex-shrink-0">
-                                                        <svg
-                                                            class="animate-spin h-3 w-3 text-current"
-                                                            xmlns="http://www.w3.org/2000/svg"
-                                                            fill="none"
-                                                            viewBox="0 0 24 24"
-                                                        >
-                                                            <circle
-                                                                class="opacity-25"
-                                                                cx="12"
-                                                                cy="12"
-                                                                r="10"
-                                                                stroke="currentColor"
-                                                                stroke-width="4"
-                                                            ></circle>
-                                                            <path
-                                                                class="opacity-75"
-                                                                fill="currentColor"
-                                                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                                                            ></path>
-                                                        </svg>
-                                                    </div>
-                                                }
-                                                    .into_any()
-                                            } else {
-                                                view! { <div></div> }.into_any()
-                                            }
-                                        }}
-
-                                    </div>
-                                </div>
-                            </button>
-                        }
-                    }}
-
-                    <button
-                        class="delete-button ib text-teal-600 dark:text-mint-400 hover:text-teal-400 dark:hover:text-mint-300 text-sm ml-2 p-2 
-                        bg-gray-400 dark:bg-teal-900 hover:bg-gray-500 dark:hover:bg-teal-800 rounded transition duration-0 ease-in-out relative z-10"
-                        on:click=move |_| {
-                            delete_action.dispatch(thread_id_for_delete.clone());
-                        }
-                    >
-
-                        "x"
-                    </button>
-                </div>
-                {move || {
-                    if has_children {
-                        view! {
+view! {
+    <div class="thread-group">
+        <div class="thread-item-container flex flex-col relative">
+            {move || {
+                if depth > 0 {
+                    view! {
+                        <div class="absolute left-0 top-0 w-full h-full pointer-events-none">
                             <div
-                                class="absolute border-l-2 border-gray-400 dark:border-gray-600 pointer-events-none"
-                                style:left=format!("{}rem", depth as f32 * 1.5 + 0.75)
-                                style:top="3rem"
-                                style:bottom="0"
+                                class="absolute border-l-2 border-themed"
+                                style:left=format!("{}rem", (depth as f32 - 1.0) * 1.5 + 0.75)
+                                style:top="0"
+                                style:height=if is_last_child { "1.5rem" } else { "100%" }
                             ></div>
-                        }
-                            .into_any()
-                    } else {
-                        view! { <div></div> }.into_any()
+
+                            <div
+                                class="absolute border-t-2 border-themed"
+                                style:left=format!("{}rem", (depth as f32 - 1.0) * 1.5 + 0.75)
+                                style:top="1.5rem"
+                                style:width="0.75rem"
+                            ></div>
+                        </div>
                     }
-                }}
-                <div class="children-container">
-                    <For
-                        each=move || children_for_each.clone()
-                        key=|child| child.thread.id.clone()
-                        children=move |child_node| {
-                            let is_last = {
-                                let children = children_for_last_check.clone();
-                                let child_id = child_node.thread.id.clone();
-                                children
-                                    .last()
-                                    .map(|last| last.thread.id == child_id)
-                                    .unwrap_or(false)
-                            };
-                            view! {
-                                <ThreadTreeNode
-                                    node=child_node
-                                    current_thread_id=current_thread_id
-                                    set_current_thread_id=set_current_thread_id
-                                    delete_action=delete_action
-                                    depth=depth + 1
-                                    is_last_child=is_last
-                                    title_updates=title_updates
-                                />
-                            }
-                        }
+                        .into_any()
+                } else {
+                    view! { <div></div> }.into_any()
+                }
+            }}
+            <div
+                class="flex w-full justify-between items-center relative z-10 overflow-hidden hover:bg-surface-secondary rounded"
+                style:margin-left=margin_left
+            >
+                // Thread button container with ellipsis truncation
+                <div class="flex-1 min-w-0">
+                    <ThreadItemButton
+                        _thread=thread_for_display.clone()
+                        is_active=is_active
+                        is_generating=is_generating_title
+                        display_title=display_title
+                        thread_type=thread_type
+                        on_click=Callback::new(move |_| {
+                            set_current_thread_id.run(thread_id_for_set.clone());
+                        })
                     />
 
                 </div>
+
+                // Trash icon - appears on hover of this specific element
+                <div class="relative flex-shrink-0 group">
+                    <IconButton
+                        variant=ButtonVariant::Ghost
+                        size=ButtonSize::Tiny
+                        class="opacity-50 text-teal-700 dark:text-teal-100 group-hover:opacity-100 transition-opacity"
+                        on_click=Callback::new(move |_| {
+                            delete_action.dispatch(thread_id_for_delete.clone());
+                        })
+                    >
+
+                        <Icon
+                            icon=icondata::BsTrash3
+                            width="12"
+                            height="12"
+                            style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
+                        />
+                    </IconButton>
+                </div>
+            </div>
+            {move || {
+                if has_children {
+                    view! {
+                        <div
+                            class="absolute border-l-2 border-themed pointer-events-none"
+                            style:left=format!("{}rem", depth as f32 * 1.5 + 0.75)
+                            style:top="3rem"
+                            style:bottom="0"
+                        ></div>
+                    }
+                        .into_any()
+                } else {
+                    view! { <div></div> }.into_any()
+                }
+            }}
+            <div class="children-container">
+                <For
+                    each=move || children_for_each.clone()
+                    key=|child| child.thread.id.clone()
+                    children=move |child_node| {
+                        let is_last = {
+                            let children = children_for_last_check.clone();
+                            let child_id = child_node.thread.id.clone();
+                            children.last().map(|last| last.thread.id == child_id).unwrap_or(false)
+                        };
+                        view! {
+                            <ThreadTreeNode
+                                node=child_node
+                                current_thread_id=current_thread_id
+                                set_current_thread_id=set_current_thread_id
+                                delete_action=delete_action
+                                depth=depth + 1
+                                is_last_child=is_last
+                                title_updates=title_updates
+                            />
+                        }
+                    }
+                />
+
             </div>
         </div>
-    }.into_any()
+    </div>
+}.into_any()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ThreadType {
+    Main,
+    Branch,
+    Project,
+}
+
+#[component]
+fn ThreadItemButton(
+    _thread: ThreadView,
+    is_active: Memo<bool>,
+    is_generating: Memo<bool>,
+    display_title: Memo<String>,
+    thread_type: Memo<ThreadType>,
+    #[prop(into)] on_click: Callback<web_sys::MouseEvent>,
+) -> impl IntoView {
+    let get_icon_and_style = move || {
+        let active = is_active.get();
+        let thread_type = thread_type.get();
+        
+        match (thread_type, active) {
+            (ThreadType::Branch, true) => (
+                view! {
+                    <div class="rotate-180-mirror w-4 h-4 flex items-center justify-center">
+                        <Icon icon=icondata::MdiSourceBranch width="16" height="16"/>
+                    </div>
+                }.into_any(),
+                ButtonVariant::Success,
+                "text-white"
+            ),
+            (ThreadType::Branch, false) => (
+                view! {
+                    <div class="rotate-180-mirror w-4 h-4 flex items-center justify-center">
+                        <Icon icon=icondata::MdiSourceBranch width="16" height="16"/>
+                    </div>
+                }.into_any(),
+                ButtonVariant::Outline,
+                "text-themed-primary"
+            ),
+            (ThreadType::Project, true) => (
+                view! {
+                    <div class="w-4 h-4 flex items-center justify-center">
+                        <Icon icon=icondata::BsFolder2Open width="16" height="16"/>
+                    </div>
+                }.into_any(),
+                ButtonVariant::Success,
+                "text-white"
+            ),
+            (ThreadType::Project, false) => (
+                view! {
+                    <div class="w-4 h-4 flex items-center justify-center">
+                        <Icon icon=icondata::BsFolder2 width="16" height="16"/>
+                    </div>
+                }.into_any(),
+                ButtonVariant::Outline,
+                "text-themed-primary"
+            ),
+            (ThreadType::Main, true) => (
+                view! {
+                    <div class="w-4 h-4 flex items-center justify-center">
+                        <Icon icon=icondata::BsChatRightDots width="16" height="16"/>
+                    </div>
+                }.into_any(),
+                ButtonVariant::Primary,
+                "text-white"
+            ),
+            (ThreadType::Main, false) => (
+                view! {
+                    <div class="w-4 h-4 flex items-center justify-center">
+                        <Icon icon=icondata::BsChatLeft width="16" height="16"/>
+                    </div>
+                }.into_any(),
+                ButtonVariant::Outline,
+                "text-teal-700"
+            ),
+        }
+    };
+
+    view! {
+        {move || {
+            let (icon, variant, extra_class) = get_icon_and_style();
+            let title = display_title.get();
+            view! {
+                <Button
+                    variant=variant
+                    size=ButtonSize::Small
+                    full_width=true
+                    class=format!(
+                        "text-left text-sm justify-start gap-2 {} {}",
+                        extra_class,
+                        if is_generating.get() { "animate-pulse" } else { "" },
+                    )
+
+                    on_click=on_click
+                >
+                    {icon}
+                    <span class="truncate ir">{title}</span>
+                </Button>
+            }
+        }}
+    }
+}
+
+#[component]
+fn UserInfo() -> impl IntoView {
+    let auth = use_context::<AuthContext>().expect("AuthContext not found");
+    let current_user = Resource::new(|| (), |_| get_current_user());
+
+    view! {
+        <div class="border-t border-themed pt-3 mt-3 p-4">
+            <Transition fallback=|| {
+                view! {
+                    <div class="flex items-center space-x-3 p-3 card-themed animate-pulse">
+                        <div class="w-10 h-10 bg-surface-secondary rounded-full"></div>
+                        <div class="flex-1 space-y-1">
+                            <div class="h-4 bg-surface-secondary rounded"></div>
+                            <div class="h-3 bg-surface-secondary rounded w-3/4"></div>
+                        </div>
+                    </div>
+                }
+            }>
+                {move || {
+                    if auth.is_loading.get() {
+                        view! {
+                            <div class="flex items-center space-x-3 p-3 card-themed animate-pulse">
+                                <div class="w-10 h-10 bg-surface-secondary rounded-full"></div>
+                                <div class="flex-1">
+                                    <div class="text-sm text-themed-secondary">"Loading..."</div>
+                                </div>
+                            </div>
+                        }
+                            .into_any()
+                    } else if auth.is_authenticated.get() {
+                        current_user
+                            .get()
+                            .map(|user_result| {
+                                match user_result {
+                                    Ok(Some(user)) => {
+                                        view! {
+                                            <a
+                                                href="/admin-panel"
+                                                class="flex items-center space-x-3 p-3 card-themed card-hover cursor-pointer group"
+                                            >
+                                                {user
+                                                    .avatar_url
+                                                    .as_ref()
+                                                    .map(|avatar| {
+                                                        view! {
+                                                            <img
+                                                                src=avatar.clone()
+                                                                alt="User avatar"
+                                                                class="w-10 h-10 rounded-full border-2 border-themed"
+                                                            />
+                                                        }
+                                                            .into_any()
+                                                    })
+                                                    .unwrap_or_else(|| {
+                                                        view! {
+                                                            <div class="w-10 h-10 bg-primary-600 rounded-full flex items-center justify-center text-white text-lg">
+                                                                {user
+                                                                    .display_name
+                                                                    .clone()
+                                                                    .or(user.username.clone())
+                                                                    .unwrap_or_else(|| "U".to_string())
+                                                                    .chars()
+                                                                    .next()
+                                                                    .unwrap_or('U')
+                                                                    .to_uppercase()
+                                                                    .to_string()}
+                                                            </div>
+                                                        }
+                                                            .into_any()
+                                                    })}
+
+                                                <div class="flex-1 min-w-0">
+                                                    <p class="text-sm font-medium text-themed-primary truncate group-hover:opacity-80">
+                                                        {user
+                                                            .display_name
+                                                            .clone()
+                                                            .or(user.username.clone())
+                                                            .unwrap_or_else(|| "Anonymous".to_string())}
+                                                    </p>
+                                                    <p class="text-xs text-themed-secondary group-hover:opacity-80">
+                                                        "free"
+                                                    </p>
+                                                </div>
+                                                <div class="text-themed-secondary group-hover:text-themed-primary">
+                                                    "›"
+                                                </div>
+                                            </a>
+                                        }
+                                            .into_any()
+                                    }
+                                    Ok(None) => {
+                                        view! {
+                                            <Button
+                                                variant=ButtonVariant::Success
+                                                full_width=true
+                                                class="justify-center"
+                                                on_click=Callback::new(|_| {
+                                                    if let Some(window) = web_sys::window() {
+                                                        let _ = window.location().set_href("/admin");
+                                                    }
+                                                })
+                                            >
+
+                                                "Sign In"
+                                            </Button>
+                                        }
+                                            .into_any()
+                                    }
+                                    Err(_) => {
+                                        view! {
+                                            <div class="flex items-center justify-center p-3 bg-danger-500 text-white rounded-lg text-sm">
+                                                "Error loading user"
+                                            </div>
+                                        }
+                                            .into_any()
+                                    }
+                                }
+                            })
+                            .unwrap_or_else(|| {
+                                view! {
+                                    <div class="flex items-center justify-center p-3 card-themed text-sm text-themed-secondary">
+                                        "Loading user..."
+                                    </div>
+                                }
+                                    .into_any()
+                            })
+                    } else {
+                        view! {
+                            <Button
+                                variant=ButtonVariant::Success
+                                full_width=true
+                                class="justify-center"
+                                on_click=Callback::new(|_| {
+                                    if let Some(window) = web_sys::window() {
+                                        let _ = window.location().set_href("/admin");
+                                    }
+                                })
+                            >
+
+                                "Sign In"
+                            </Button>
+                        }
+                            .into_any()
+                    }
+                }}
+
+            </Transition>
+        </div>
+    }
 }
 
 // Helper function to build thread tree structure - make it deterministic
@@ -755,136 +852,6 @@ fn build_thread_tree(threads: Vec<ThreadView>) -> Vec<ThreadNode> {
 struct ThreadNode {
     thread: ThreadView,
     children: Vec<ThreadNode>,
-}
-
-#[component]
-fn UserInfo() -> impl IntoView {
-    let auth = use_context::<AuthContext>().expect("AuthContext not found");
-    let current_user = Resource::new(|| (), |_| get_current_user());
-
-    view! {
-        <div class="border-t border-gray-400 dark:border-teal-600 pt-3 mt-3">
-            <Transition fallback=|| {
-                view! {
-                    <div class="flex items-center space-x-3 p-3 bg-gray-100 dark:bg-teal-700 rounded-lg">
-                        <div class="w-10 h-10 bg-gray-300 dark:bg-teal-600 rounded-full animate-pulse"></div>
-                        <div class="flex-1 space-y-1">
-                            <div class="h-4 bg-gray-300 dark:bg-teal-600 rounded animate-pulse"></div>
-                            <div class="h-3 bg-gray-300 dark:bg-teal-600 rounded w-3/4 animate-pulse"></div>
-                        </div>
-                    </div>
-                }
-            }>
-                {move || {
-                    if auth.is_loading.get() {
-                        view! {
-                            <div class="flex items-center space-x-3 p-3 bg-gray-100 dark:bg-teal-700 rounded-lg">
-                                <div class="w-10 h-10 bg-gray-300 dark:bg-teal-600 rounded-full animate-pulse"></div>
-                                <div class="flex-1">
-                                    <div class="text-sm text-gray-500 dark:text-gray-400">
-                                        "Loading..."
-                                    </div>
-                                </div>
-                            </div>
-                        }
-                            .into_any()
-                    } else if auth.is_authenticated.get() {
-                        current_user
-                            .get()
-                            .map(|user_result| {
-                                match user_result {
-                                    Ok(Some(user)) => {
-                                        view! {
-                                            <a
-                                                href="/admin-panel"
-                                                class="flex items-center space-x-3 p-3 bg-gray-100 dark:bg-teal-700 rounded-lg hover:bg-gray-200 dark:hover:bg-teal-600 transition-colors cursor-pointer group"
-                                            >
-                                                {user
-                                                    .avatar_url
-                                                    .as_ref()
-                                                    .map(|avatar| {
-                                                        view! {
-                                                            <img
-                                                                src=avatar.clone()
-                                                                alt="User avatar"
-                                                                class="w-10 h-10 rounded-full border-2 border-gray-300 dark:border-teal-500"
-                                                            />
-                                                        }
-                                                            .into_any()
-                                                    })
-                                                    .unwrap_or_else(|| {
-                                                        view! {
-                                                            <div class="w-10 h-10 bg-gray-300 dark:bg-teal-500 rounded-full flex items-center justify-center text-gray-600 dark:text-gray-300">
-                                                                "👤"
-                                                            </div>
-                                                        }
-                                                            .into_any()
-                                                    })}
-
-                                                <div class="flex-1 min-w-0">
-                                                    <p class="text-sm font-medium text-gray-800 dark:text-gray-200 truncate group-hover:text-gray-900 dark:group-hover:text-white">
-                                                        {user
-                                                            .display_name
-                                                            .clone()
-                                                            .or(user.username.clone())
-                                                            .unwrap_or_else(|| "Anonymous".to_string())}
-                                                    </p>
-                                                    <p class="text-xs text-gray-500 dark:text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300">
-                                                        "free"
-                                                    </p>
-                                                </div>
-                                                <div class="text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300">
-                                                    "›"
-                                                </div>
-                                            </a>
-                                        }
-                                            .into_any()
-                                    }
-                                    Ok(None) => {
-                                        view! {
-                                            <a
-                                                href="/admin"
-                                                class="flex items-center justify-center p-3 bg-seafoam-500 dark:bg-seafoam-600 text-white rounded-lg hover:bg-seafoam-600 dark:hover:bg-seafoam-700 transition-colors"
-                                            >
-                                                "Sign In"
-                                            </a>
-                                        }
-                                            .into_any()
-                                    }
-                                    Err(_) => {
-                                        view! {
-                                            <div class="flex items-center justify-center p-3 bg-salmon-100 dark:bg-salmon-900 text-salmon-600 dark:text-salmon-400 rounded-lg text-sm">
-                                                "Error loading user"
-                                            </div>
-                                        }
-                                            .into_any()
-                                    }
-                                }
-                            })
-                            .unwrap_or_else(|| {
-                                view! {
-                                    <div class="flex items-center justify-center p-3 bg-gray-200 dark:bg-teal-700 rounded-lg text-sm text-gray-500 dark:text-gray-400">
-                                        "Loading user..."
-                                    </div>
-                                }
-                                    .into_any()
-                            })
-                    } else {
-                        view! {
-                            <a
-                                href="/admin"
-                                class="flex items-center justify-center p-3 bg-seafoam-500 dark:bg-seafoam-600 text-white rounded-lg hover:bg-seafoam-600 dark:hover:bg-seafoam-700 transition-colors"
-                            >
-                                "Sign In"
-                            </a>
-                        }
-                            .into_any()
-                    }
-                }}
-
-            </Transition>
-        </div>
-    }
 }
 
 #[server(SearchThreads, "/api")]
@@ -1265,4 +1232,5 @@ pub async fn get_thread_branches(thread_id: String) -> Result<Vec<crate::models:
     
     Ok(branch_infos)
 }
+
 

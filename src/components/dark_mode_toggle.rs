@@ -2,6 +2,8 @@ use leptos::{prelude::*, task::spawn_local};
 use leptos_icons::Icon;
 use web_sys::window;
 
+use crate::components::ui::{IconButton, ButtonVariant};
+
 #[cfg(feature = "ssr")]
 const DARK_MODE_COOKIE: &str = "bb_dark_mode";
 
@@ -68,22 +70,34 @@ pub fn DarkModeToggle() -> impl IntoView {
     };
 
     view! {
-        <button
-            on:click=toggle_dark_mode
-            class="text-teal-700 dark:text-teal-100 hover:text-teal-600 dark:hover:text-teal-200 
-            px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
-            border border-gray-600 dark:border-gray-500 hover:border-gray-800 dark:hover:border-gray-400 
-            rounded transition-colors duration-100 flex items-center justify-center"
+        <IconButton
+            variant=ButtonVariant::Primary
+            on_click=Callback::new(toggle_dark_mode)
+            class="transition-colors duration-0"
         >
             {move || {
                 if is_dark.get() {
-                    view! { <Icon icon=icondata::FiSun width="16" height="16"/> }
+                    view! {
+                        <Icon
+                            icon=icondata::FiSun
+                            width="16"
+                            height="16"
+                            style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
+                        />
+                    }
                 } else {
-                    view! { <Icon icon=icondata::LuMoon width="16" height="16"/> }
+                    view! {
+                        <Icon
+                            icon=icondata::LuMoon
+                            width="16"
+                            height="16"
+                            style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
+                        />
+                    }
                 }
             }}
 
-        </button>
+        </IconButton>
     }
 }
 
