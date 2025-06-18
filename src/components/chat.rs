@@ -1,15 +1,16 @@
 use cfg_if::cfg_if;
 use leptos::{prelude::*, task::spawn_local};
-use log::error;
+use log::{info, error};
 use urlencoding;
-use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
+use wasm_bindgen_futures::JsFuture;
 use web_sys::{EventSource, MessageEvent, ErrorEvent, HtmlElement};
 use chrono::Utc;
 
 use crate::{auth::get_current_user, models::conversations::{NewMessageView, PendingMessage}};
 use crate::components::toast::Toast;
+use crate::types::StreamResponse;
 
 cfg_if! {
     if #[cfg(feature = "ssr")] {
@@ -23,6 +24,8 @@ cfg_if! {
         use serde_json::Value;
         use tokio::sync::mpsc;
         use futures::stream::{Stream, StreamExt};
+        use tokio_util::sync::CancellationToken;
+        use std::convert::Infallible;
         use log::debug;
 
         use crate::database::db::DbPool;
@@ -60,17 +63,24 @@ cfg_if! {
                 let client = Client::new();
                 AnthropicService { client, api_key, model }
             }
-
-            pub async fn send_message_with_context(
+        
+            pub async fn send_message_with_context_cancellable(
                 &self,
                 pool: &DbPool,
                 thread_id: &str,
                 context: &str,
-                tx: mpsc::Sender<Result<Event, std::convert::Infallible>>
+                tx: mpsc::Sender<Result<Event, Infallible>>,
+                cancel_token: CancellationToken,
             ) -> Result<(), anyhow::Error> {
-                debug!("Sending message to Anthropic API with project context");
+                debug!("Sending message to Anthropic API with project context (cancellable)");
                 debug!("Current thread id: {thread_id}");
-            
+        
+                // Check for cancellation before starting
+                if cancel_token.is_cancelled() {
+                    info!("Anthropic message cancelled before starting");
+                    return Ok(());
+                }
+        
                 let mut history = fetch_message_history(thread_id, pool).await?;
                 
                 // Inject context before the last user message
@@ -81,14 +91,20 @@ cfg_if! {
                         }
                     }
                 }
-            
+        
+                // Check for cancellation before API call
+                if cancel_token.is_cancelled() {
+                    info!("Anthropic message cancelled before API call");
+                    return Ok(());
+                }
+        
                 let api_messages = history.into_iter()
                     .map(|msg| serde_json::json!({
                         "role": msg.role,
                         "content": msg.content.unwrap_or_default(),
                     }))
                     .collect::<Vec<_>>();
-            
+        
                 let response = self.client.post("https://api.anthropic.com/v1/messages")
                     .header("x-api-key", self.api_key.to_string())
                     .header("anthropic-version", "2023-06-01")
@@ -102,10 +118,17 @@ cfg_if! {
                     .send()
                     .await
                     .map_err(|e| anyhow!("Failed to send message: {}", e))?;
-            
+        
                 let mut stream = response.bytes_stream();
-
+        
                 while let Some(item) = stream.next().await {
+                    // Check for cancellation in each iteration
+                    if cancel_token.is_cancelled() {
+                        info!("Anthropic message stream cancelled during processing");
+                        let _ = tx.send(Ok(Event::default().data("[CANCELLED]"))).await;
+                        return Ok(());
+                    }
+        
                     match item {
                         Ok(bytes) => {
                             let event = String::from_utf8(bytes.to_vec())
@@ -145,21 +168,34 @@ cfg_if! {
                         }
                     }
                 }
-            
+        
                 debug!("Stream closed");
                 Ok(())
             }
-
-            pub async fn send_message(
+        
+            pub async fn send_message_cancellable(
                 &self,
                 pool: &DbPool,
                 thread_id: &str,
-                tx: mpsc::Sender<Result<Event, std::convert::Infallible>>
+                tx: mpsc::Sender<Result<Event, Infallible>>,
+                cancel_token: CancellationToken,
             ) -> Result<(), anyhow::Error> {
-                debug!("Sending message to OpenAI API");
+                debug!("Sending message to Anthropic API (cancellable)");
                 debug!("Current thread id: {thread_id}");
-
+        
+                // Check for cancellation before starting
+                if cancel_token.is_cancelled() {
+                    info!("Anthropic message cancelled before starting");
+                    return Ok(());
+                }
+        
                 let history = fetch_message_history(thread_id, pool).await?;
+        
+                // Check for cancellation before API call
+                if cancel_token.is_cancelled() {
+                    info!("Anthropic message cancelled before API call");
+                    return Ok(());
+                }
         
                 let api_messages = history.into_iter()
                     .map(|msg| serde_json::json!({
@@ -181,10 +217,17 @@ cfg_if! {
                     .send()
                     .await
                     .map_err(|e| anyhow!("Failed to send message: {}", e))?;
-
+        
                 let mut stream = response.bytes_stream();
-
+        
                 while let Some(item) = stream.next().await {
+                    // Check for cancellation in each iteration
+                    if cancel_token.is_cancelled() {
+                        info!("Anthropic message stream cancelled during processing");
+                        let _ = tx.send(Ok(Event::default().data("[CANCELLED]"))).await;
+                        return Ok(());
+                    }
+        
                     match item {
                         Ok(bytes) => {
                             let event = String::from_utf8(bytes.to_vec())
@@ -224,7 +267,7 @@ cfg_if! {
                         }
                     }
                 }
-
+        
                 debug!("Stream closed");
                 Ok(())
             }
@@ -267,14 +310,228 @@ cfg_if! {
             None
         }
 
-
         impl OpenAIService {
             pub fn new(model: String) -> Self {
                 let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set.");
                 let client = Client::new();
                 OpenAIService { client, api_key, model }
             }
-
+        
+            pub async fn send_message_with_context_cancellable(
+                &self,
+                pool: &DbPool,
+                thread_id: &str,
+                context: &str,
+                tx: mpsc::Sender<Result<Event, Infallible>>,
+                cancel_token: CancellationToken,
+            ) -> Result<(), anyhow::Error> {
+                debug!("Sending message to OpenAI API with project context (cancellable)");
+                debug!("Current thread id: {thread_id}");
+        
+                // Check for cancellation before starting
+                if cancel_token.is_cancelled() {
+                    info!("OpenAI message cancelled before starting");
+                    return Ok(());
+                }
+        
+                let mut history = fetch_message_history(thread_id, pool).await?;
+        
+                // Inject context before the last user message
+                if let Some(last_message) = history.last_mut() {
+                    if last_message.role == "user" {
+                        if let Some(ref mut content) = last_message.content {
+                            *content = format!("{}\n\nUser Query: {}", context, content);
+                        }
+                    }
+                }
+        
+                // Check for cancellation before API call
+                if cancel_token.is_cancelled() {
+                    info!("OpenAI message cancelled before API call");
+                    return Ok(());
+                }
+        
+                let api_messages = history.into_iter()
+                    .map(|msg| serde_json::json!({
+                        "role": msg.role,
+                        "content": msg.content.unwrap_or_default(),
+                    }))
+                    .collect::<Vec<_>>();
+        
+                let response = self.client.post("https://api.openai.com/v1/chat/completions")
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&serde_json::json!({
+                        "model": self.model,
+                        "messages": api_messages,
+                        "max_tokens": 1360,
+                        "stream": true,
+                    }))
+                    .send()
+                    .await
+                    .map_err(|e| anyhow!("Failed to send message: {}", e))?;
+        
+                let mut stream = response.bytes_stream();
+                
+                while let Some(item) = stream.next().await {
+                    // Check for cancellation in each iteration
+                    if cancel_token.is_cancelled() {
+                        info!("OpenAI message stream cancelled during processing");
+                        let _ = tx.send(Ok(Event::default().data("[CANCELLED]"))).await;
+                        return Ok(());
+                    }
+        
+                    match item {
+                        Ok(bytes) => {
+                            let event = String::from_utf8(bytes.to_vec())
+                                .map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
+                            
+                            debug!("Raw event: {}", event.trim());
+                            
+                            for line in event.trim().lines() {
+                                if line.trim() == "data: [DONE]" {
+                                    debug!("Received [DONE] event");
+                                    tx.send(Ok(Event::default().data("[DONE]"))).await.ok();
+                                    return Ok(());
+                                } else if line.trim().starts_with("data: ") {
+                                    let json_str = &line.trim()[6..];
+                                    
+                                    if let Ok(parsed) = serde_json::from_str::<Value>(json_str) {
+                                        if let Some(choices) = parsed["choices"].as_array() {
+                                            if let Some(first_choice) = choices.first() {
+                                                if let Some(delta) = first_choice["delta"].as_object() {
+                                                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                                        debug!("Extracted content: {}", content);
+                                                        tx.send(Ok(Event::default().data(content))).await.ok();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        if let Some(content) = extract_content_with_escaping(json_str) {
+                                            debug!("Fallback extracted content: {}", content);
+                                            tx.send(Ok(Event::default().data(content))).await.ok();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to process stream: {e}");
+                            let error_event = Event::default().data(format!("Error: Failed to process stream: {e}"));
+                            tx.send(Ok(error_event)).await.ok();
+                            break;
+                        }
+                    }
+                }
+        
+                debug!("Stream closed");
+                Ok(())
+            }
+        
+            pub async fn send_message_cancellable(
+                &self,
+                pool: &DbPool,
+                thread_id: &str,
+                tx: mpsc::Sender<Result<Event, Infallible>>,
+                cancel_token: CancellationToken,
+            ) -> Result<(), anyhow::Error> {
+                debug!("Sending message to OpenAI API (cancellable)");
+                debug!("Current thread id: {thread_id}");
+        
+                // Check for cancellation before starting
+                if cancel_token.is_cancelled() {
+                    info!("OpenAI message cancelled before starting");
+                    return Ok(());
+                }
+        
+                let history = fetch_message_history(thread_id, pool).await?;
+        
+                // Check for cancellation before API call
+                if cancel_token.is_cancelled() {
+                    info!("OpenAI message cancelled before API call");
+                    return Ok(());
+                }
+        
+                let api_messages = history.into_iter()
+                    .map(|msg| serde_json::json!({
+                        "role": msg.role,
+                        "content": msg.content.unwrap_or_default(),
+                    }))
+                    .collect::<Vec<_>>();
+        
+                let response = self.client.post("https://api.openai.com/v1/chat/completions")
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&serde_json::json!({
+                        "model": self.model,
+                        "messages": api_messages,
+                        "max_tokens": 1360,
+                        "stream": true,
+                    }))
+                    .send()
+                    .await
+                    .map_err(|e| anyhow!("Failed to send message: {}", e))?;
+        
+                let mut stream = response.bytes_stream();
+        
+                while let Some(item) = stream.next().await {
+                    // Check for cancellation in each iteration
+                    if cancel_token.is_cancelled() {
+                        info!("OpenAI message stream cancelled during processing");
+                        let _ = tx.send(Ok(Event::default().data("[CANCELLED]"))).await;
+                        return Ok(());
+                    }
+        
+                    match item {
+                        Ok(bytes) => {
+                            let event = String::from_utf8(bytes.to_vec())
+                                .map_err(|e| anyhow!("Failed to convert bytes to string: {}", e))?;
+                            
+                            debug!("Raw event: {}", event.trim());
+                            
+                            for line in event.trim().lines() {
+                                if line.trim() == "data: [DONE]" {
+                                    debug!("Received [DONE] event");
+                                    tx.send(Ok(Event::default().data("[DONE]"))).await.ok();
+                                    return Ok(());
+                                } else if line.trim().starts_with("data: ") {
+                                    let json_str = &line.trim()[6..];
+                                    
+                                    if let Ok(parsed) = serde_json::from_str::<Value>(json_str) {
+                                        if let Some(choices) = parsed["choices"].as_array() {
+                                            if let Some(first_choice) = choices.first() {
+                                                if let Some(delta) = first_choice["delta"].as_object() {
+                                                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                                        debug!("Extracted content: {}", content);
+                                                        tx.send(Ok(Event::default().data(content))).await.ok();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        if let Some(content) = extract_content_with_escaping(json_str) {
+                                            debug!("Fallback extracted content: {}", content);
+                                            tx.send(Ok(Event::default().data(content))).await.ok();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to process stream: {e}");
+                            let error_event = Event::default().data(format!("Error: Failed to process stream: {e}"));
+                            tx.send(Ok(error_event)).await.ok();
+                            break;
+                        }
+                    }
+                }
+        
+                debug!("Stream closed");
+                Ok(())
+            }
+        
+            // Keep the original non-cancellable methods for backward compatibility
             pub async fn send_message_with_context(
                 &self,
                 pool: &DbPool,
@@ -365,9 +622,8 @@ cfg_if! {
         
                 debug!("Stream closed");
                 Ok(())
-
             }
-
+        
             pub async fn send_message(
                 &self,
                 pool: &DbPool,
@@ -376,16 +632,16 @@ cfg_if! {
             ) -> Result<(), anyhow::Error> {
                 debug!("Sending message to OpenAI API");
                 debug!("Current thread id: {thread_id}");
-
+        
                 let history = fetch_message_history(thread_id, pool).await?;
-
+        
                 let api_messages = history.into_iter()
                     .map(|msg| serde_json::json!({
                         "role": msg.role,
                         "content": msg.content.unwrap_or_default(),
                     }))
                     .collect::<Vec<_>>();
-
+        
                 let response = self.client.post("https://api.openai.com/v1/chat/completions")
                     .header("Authorization", format!("Bearer {}", self.api_key))
                     .header("Content-Type", "application/json")
@@ -398,9 +654,9 @@ cfg_if! {
                     .send()
                     .await
                     .map_err(|e| anyhow!("Failed to send message: {}", e))?;
-
+        
                 let mut stream = response.bytes_stream();
-
+        
                 while let Some(item) = stream.next().await {
                     match item {
                         Ok(bytes) => {
@@ -445,7 +701,7 @@ cfg_if! {
                         }
                     }
                 }
-
+        
                 debug!("Stream closed");
                 Ok(())
             }
@@ -496,17 +752,25 @@ cfg_if! {
         }
 
         #[cfg(feature = "ssr")]
-        pub async fn send_message_stream_with_project(
+        pub async fn send_message_stream_with_project_cancellable(
             pool: &DbPool,
             thread_id: String,
             model: String,
             active_lab: String,
-            tx: mpsc::Sender<Result<Event, std::convert::Infallible>>
-        ) {
+            tx: mpsc::Sender<Result<Event, Infallible>>,
+            cancel_token: CancellationToken,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            use log::{info, error};
             use crate::services::projects::ProjectsService;
             use crate::schema::threads;
             use diesel::prelude::*;
             use diesel_async::RunQueryDsl;
+        
+            // Check for cancellation before starting
+            if cancel_token.is_cancelled() {
+                info!("Message stream cancelled before starting");
+                return Ok(());
+            }
         
             let decoded_thread_id = urlencoding::decode(&thread_id).expect("Failed to decode thread_id");
             let decoded_model = urlencoding::decode(&model).expect("Failed to decode model");
@@ -516,9 +780,15 @@ cfg_if! {
                 Ok(conn) => conn,
                 Err(e) => {
                     error!("Failed to get database connection: {e}");
-                    return;
+                    return Err(e.into());
                 }
             };
+        
+            // Check for cancellation before database operations
+            if cancel_token.is_cancelled() {
+                info!("Message stream cancelled during database connection");
+                return Ok(());
+            }
         
             // Check if this thread is associated with a project
             let thread_info: Result<Option<uuid::Uuid>, diesel::result::Error> = threads::table
@@ -526,7 +796,7 @@ cfg_if! {
                 .filter(threads::id.eq(decoded_thread_id.as_ref()))
                 .first(&mut conn)
                 .await;
-
+        
             log::debug!("found thread in project: {thread_info:?}");
         
             let project_id = match thread_info {
@@ -536,6 +806,12 @@ cfg_if! {
                     None
                 }
             };
+        
+            // Check for cancellation before project context retrieval
+            if cancel_token.is_cancelled() {
+                info!("Message stream cancelled before project context retrieval");
+                return Ok(());
+            }
         
             // If this is a project thread, get the last user message for context
             let project_context = if let Some(proj_id) = project_id {
@@ -551,6 +827,12 @@ cfg_if! {
                     });
         
                 if let Some(user_query) = last_user_message {
+                    // Check for cancellation before project context retrieval
+                    if cancel_token.is_cancelled() {
+                        info!("Message stream cancelled during project context retrieval");
+                        return Ok(());
+                    }
+        
                     let projects_service = ProjectsService::new();
                     match projects_service.get_project_context(pool, proj_id, &user_query).await {
                         Ok(context) => Some(context),
@@ -566,16 +848,34 @@ cfg_if! {
                 None
             };
         
+            // Check for cancellation before sending message
+            if cancel_token.is_cancelled() {
+                info!("Message stream cancelled before sending message");
+                return Ok(());
+            }
+        
             // Modify the message history to include project context
             let result = if let Some(context) = project_context {
                 match decoded_lab.as_ref() {
                     "anthropic" => {
                         let anthropic_service = AnthropicService::new(decoded_model.into_owned());
-                        anthropic_service.send_message_with_context(pool, &decoded_thread_id, &context, tx.clone()).await
+                        anthropic_service.send_message_with_context_cancellable(
+                            pool, 
+                            &decoded_thread_id, 
+                            &context, 
+                            tx.clone(),
+                            cancel_token.clone()
+                        ).await
                     },
                     "openai" => {
                         let openai_service = OpenAIService::new(decoded_model.into_owned());
-                        openai_service.send_message_with_context(pool, &decoded_thread_id, &context, tx.clone()).await
+                        openai_service.send_message_with_context_cancellable(
+                            pool, 
+                            &decoded_thread_id, 
+                            &context, 
+                            tx.clone(),
+                            cancel_token.clone()
+                        ).await
                     },
                     _ => Err(anyhow::anyhow!("unsupported lab: {}", decoded_lab)),
                 }
@@ -584,11 +884,21 @@ cfg_if! {
                 match decoded_lab.as_ref() {
                     "anthropic" => {
                         let anthropic_service = AnthropicService::new(decoded_model.into_owned());
-                        anthropic_service.send_message(pool, &decoded_thread_id, tx.clone()).await
+                        anthropic_service.send_message_cancellable(
+                            pool, 
+                            &decoded_thread_id, 
+                            tx.clone(),
+                            cancel_token.clone()
+                        ).await
                     },
                     "openai" => {
                         let openai_service = OpenAIService::new(decoded_model.into_owned());
-                        openai_service.send_message(pool, &decoded_thread_id, tx.clone()).await
+                        openai_service.send_message_cancellable(
+                            pool, 
+                            &decoded_thread_id, 
+                            tx.clone(),
+                            cancel_token.clone()
+                        ).await
                     },
                     _ => Err(anyhow::anyhow!("unsupported lab: {}", decoded_lab)),
                 }
@@ -598,8 +908,13 @@ cfg_if! {
                 error!("Error in send_message_stream: {e}");
                 let error_event = Event::default().data(format!("Error: {e}"));
                 let _ = tx.send(Ok(error_event)).await;
+                return Err(e.into());
             }
+        
+            Ok(())
         }
+
+
     }
 }
 
@@ -612,6 +927,7 @@ pub fn Chat(
 ) -> impl IntoView {
     let (message, set_message) = signal(String::new());
     let (is_sending, set_is_sending) = signal(false);
+    let (current_stream_id, set_current_stream_id) = signal::<Option<String>>(None);
     
     let (model, set_model) = signal("gpt-4o-mini".to_string());
     let (lab, set_lab) = signal("openai".to_string());
@@ -705,101 +1021,180 @@ pub fn Chat(
                         set_pending.update(|msgs| msgs.push(pending_msg));
                     }
 
-                    // 4. Set up SSE stream to collect content
+                    // 4. First create a stream
+                    let window = web_sys::window().unwrap();
+                    let resp_value = match JsFuture::from(window.fetch_with_str("/api/create-stream")).await {
+                        Ok(val) => val,
+                        Err(e) => {
+                            error!("Failed to create stream: {e:?}");
+                            set_is_sending(false);
+                            // Remove pending message on error
+                            if let Some(set_pending) = pending_messages {
+                                set_pending.update(|msgs| {
+                                    msgs.retain(|m| m.id != pending_id)
+                                });
+                            }
+                            show_toast("Failed to create message stream. Please try again.".to_string());
+                            return;
+                        }
+                    };
+
+                    let resp = resp_value.dyn_into::<web_sys::Response>().unwrap();
+                    let json = match JsFuture::from(resp.json().unwrap()).await {
+                        Ok(json) => json,
+                        Err(e) => {
+                            error!("Failed to parse stream response: {e:?}");
+                            set_is_sending(false);
+                            // Remove pending message on error
+                            if let Some(set_pending) = pending_messages {
+                                set_pending.update(|msgs| {
+                                    msgs.retain(|m| m.id != pending_id)
+                                });
+                            }
+                            show_toast("Failed to create message stream. Please try again.".to_string());
+                            return;
+                        }
+                    };
+
+                    let stream_data: StreamResponse = match serde_wasm_bindgen::from_value(json) {
+                        Ok(data) => data,
+                        Err(e) => {
+                            error!("Failed to deserialize stream response: {e:?}");
+                            set_is_sending(false);
+                            // Remove pending message on error
+                            if let Some(set_pending) = pending_messages {
+                                set_pending.update(|msgs| {
+                                    msgs.retain(|m| m.id != pending_id)
+                                });
+                            }
+                            show_toast("Failed to create message stream. Please try again.".to_string());
+                            return;
+                        }
+                    };
+
+                    let stream_id = stream_data.stream_id;
+                    set_current_stream_id(Some(stream_id.clone()));
+
+                    // 5. Set up SSE stream to collect content using the stream_id
                     let mut accumulated_content = String::new();
                     
                     let thread_id_value = thread_id.get_untracked().to_string();
                     let active_model_value = model.get_untracked().to_string();
                     let active_lab_value = lab.get_untracked().to_string();
-                    let event_source = Rc::new(EventSource::new(
-                            &format!("/api/send_message_stream?thread_id={}&model={}&lab={}",
-                            urlencoding::encode(&thread_id_value),
-                            urlencoding::encode(&active_model_value),
-                            urlencoding::encode(&active_lab_value))
-                        ).expect("Failed to connect to SSE endpoint"));
-        
+
+                    let url = format!(
+                        "/api/send_message_stream?stream_id={}&thread_id={}&model={}&lab={}",
+                        urlencoding::encode(&stream_id),
+                        urlencoding::encode(&thread_id_value),
+                        urlencoding::encode(&active_model_value),
+                        urlencoding::encode(&active_lab_value)
+                    );
+
+                    let event_source = EventSource::new(&url)
+                        .expect("Failed to connect to SSE endpoint");
+                    
+                    let event_source_clone = event_source.clone();
         			let on_message = {
-        				let event_source = Rc::clone(&event_source);
                         let on_message_created_clone = on_message_created;
                         let pending_id_clone = pending_id.clone();
         				Closure::wrap(Box::new(move |event: MessageEvent| {
-        					let data = event.data().as_string().unwrap();
-        					if data == "[DONE]" {
-                                // 5. Save final content to DB and remove from pending
-                                let final_content = accumulated_content.clone();
-                                let is_llm = true;
-                                let assistant_message_view = NewMessageView {
-                                    thread_id: thread_id.get_untracked().clone(),
-                                    content: Some(final_content),
-                                    role: "assistant".to_string(),
-                                    active_model: model.get_untracked().clone(),
-                                    active_lab: lab.get_untracked().clone(),
-                                    user_id,
-                                };
+        					if let Some(data) = event.data().as_string() {
+                                if data == "[DONE]" {
+                                    event_source_clone.close();
+                                    set_is_sending(false);
+                                    set_current_stream_id(None);
 
-                                spawn_local(async move {
-                                    if let Err(e) = create_message(assistant_message_view, is_llm).await {
-                                        error!("Failed to create LLM message: {e:?}");
-                                    } 
-                                    if let Some(callback) = on_message_created_clone {
-                                        callback.run(());
-                                    }
-                                });
+                                    // 6. Save final content to DB and remove from pending
+                                    let final_content = accumulated_content.clone();
+                                    let is_llm = true;
+                                    let assistant_message_view = NewMessageView {
+                                        thread_id: thread_id.get_untracked().clone(),
+                                        content: Some(final_content),
+                                        role: "assistant".to_string(),
+                                        active_model: model.get_untracked().clone(),
+                                        active_lab: lab.get_untracked().clone(),
+                                        user_id,
+                                    };
 
-                                // Remove from pending messages
-                                if let Some(set_pending) = pending_messages {
-                                    set_pending.update(|msgs| {
-                                        msgs.retain(|m| m.id != pending_id_clone)
-                                    });
-                                }
-
-        						set_is_sending.set(false);
-        						event_source.close();
-        					} else {
-                                // 6. Stream tokens into pending message
-                                accumulated_content.push_str(&data);
-                                
-                                // Update pending message content
-                                if let Some(set_pending) = pending_messages {
-                                    set_pending.update(|msgs| {
-                                        if let Some(msg) = msgs.iter_mut().find(|m| m.id == pending_id_clone) {
-                                            msg.content = accumulated_content.clone();
+                                    spawn_local(async move {
+                                        if let Err(e) = create_message(assistant_message_view, is_llm).await {
+                                            error!("Failed to create LLM message: {e:?}");
+                                        } 
+                                        if let Some(callback) = on_message_created_clone {
+                                            callback.run(());
                                         }
                                     });
+
+                                    // Remove from pending messages
+                                    if let Some(set_pending) = pending_messages {
+                                        set_pending.update(|msgs| {
+                                            msgs.retain(|m| m.id != pending_id_clone)
+                                        });
+                                    }
+                                } else if data == "[CANCELLED]" {
+                                    event_source_clone.close();
+                                    set_is_sending(false);
+                                    set_current_stream_id(None);
+                                    
+                                    // Remove from pending messages
+                                    if let Some(set_pending) = pending_messages {
+                                        set_pending.update(|msgs| {
+                                            msgs.retain(|m| m.id != pending_id_clone)
+                                        });
+                                    }
+                                } else {
+                                    // 7. Stream tokens into pending message
+                                    accumulated_content.push_str(&data);
+                                    
+                                    // Update pending message content
+                                    if let Some(set_pending) = pending_messages {
+                                        set_pending.update(|msgs| {
+                                            if let Some(msg) = msgs.iter_mut().find(|m| m.id == pending_id_clone) {
+                                                msg.content = accumulated_content.clone();
+                                            }
+                                        });
+                                    }
                                 }
-        					}
+                            }
+        				}) as Box<dyn FnMut(_)>)
+        			};
+
+                    let event_source_error = event_source.clone();
+        			let on_error = {
+                        let pending_id_clone = pending_id.clone();
+        				Closure::wrap(Box::new(move |error: ErrorEvent| {
+                            error!("SSE Error: {error:?}");
+                            if let Some(es) = error.target()
+                                .and_then(|t| t.dyn_into::<web_sys::EventSource>().ok())
+                            {
+                                if es.ready_state() == web_sys::EventSource::CLOSED {
+                                    // Handle connection closed
+                                    info!("EventSource connection closed");
+                                }
+                            }
+                            event_source_error.close();
+                            set_is_sending(false);
+                            set_current_stream_id(None);
+                            
+                            // Remove from pending messages on error
+                            if let Some(set_pending) = pending_messages {
+                                set_pending.update(|msgs| {
+                                    msgs.retain(|m| m.id != pending_id_clone)
+                                });
+                            }
         				}) as Box<dyn FnMut(_)>)
         			};
         
         			event_source.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-        			on_message.forget();
-        
-        			let on_error = {
-        				let event_source = Rc::clone(&event_source);
-        				Closure::wrap(Box::new(move |event: ErrorEvent| {
-                            let error_message = format!(
-        						"Error receiving message: type = {:?}, message = {:?}, filename = {:?}, lineno = {:?}, colno = {:?}, error = {:?}",
-                                event.type_(),
-                                event.message(),
-                                event.filename(),
-                                event.lineno(),
-                                event.colno(),
-                                event.error()
-                            );
-        					error!("{error_message}");
-        					set_is_sending.set(false);
-        					event_source.close();
-        				}) as Box<dyn FnMut(_)>)
-        			};
-        
         			event_source.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+        			on_message.forget();
         			on_error.forget();
                 }
                 Err(e) => {
                     error!("Failed to create message: {e:?}");
                     let error_msg = e.to_string();
                     if error_msg.contains("Daily message limit") {
-                        show_toast("You've reached your daily limit of 20 messages. Try again tomorrow!".to_string());
+                        show_toast("You've reached your daily limit of 40 messages. Try again tomorrow!".to_string());
                     } else {
                         show_toast("Failed to send message. Please try again.".to_string());
                     }
@@ -810,8 +1205,39 @@ pub fn Chat(
         });
     };
 
+    // Add cancel function
+    let cancel_message = move || {
+        if let Some(stream_id) = current_stream_id.get() {
+            let window = web_sys::window().unwrap();
+            let url = format!("/api/cancel-stream?stream_id={}", stream_id);
+
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(_) = JsFuture::from(window.fetch_with_str(&url)).await {
+                    info!("Stream cancelled");
+                }
+            });
+            
+            set_is_sending(false);
+            set_current_stream_id(None);
+            
+            // Remove pending message on cancellation
+            if let Some(set_pending) = pending_messages {
+                set_pending.update(|msgs| {
+                    // Remove the last pending message (the one being cancelled)
+                    if let Some(last_idx) = msgs.iter().rposition(|m| m.is_streaming) {
+                        msgs.remove(last_idx);
+                    }
+                });
+            }
+        }
+    };
+
     let send_message_action = move |_: web_sys::MouseEvent| {
-        send_message();
+        if is_sending.get() {
+            cancel_message();
+        } else {
+            send_message();
+        }
     };
 
     view! {
@@ -863,12 +1289,14 @@ pub fn Chat(
                         class:focus:ring-seafoam-500=move || !is_sending.get()
                         class:dark:bg-teal-600=move || !is_sending.get()
                         class:dark:hover:bg-teal-700=move || !is_sending.get()
-                        class:bg-gray-400=move || is_sending.get()
-                        class:dark:bg-gray-600=move || is_sending.get()
+                        class:bg-red-500=move || is_sending.get()
+                        class:hover:bg-red-600=move || is_sending.get()
+                        class:dark:bg-red-600=move || is_sending.get()
+                        class:dark:hover:bg-red-700=move || is_sending.get()
                         on:click=send_message_action
-                        disabled=move || is_sending.get() || message.get().trim().is_empty()
+                        disabled=move || (!is_sending.get() && message.get().trim().is_empty())
                     >
-                        {move || if is_sending.get() { "yapping..." } else { "yap" }}
+                        {move || if is_sending.get() { "cancel" } else { "yap" }}
                     </button>
                 </div>
 
@@ -900,7 +1328,6 @@ pub fn Chat(
                         </div>
                     </div>
 
-                    // Empty div to balance the layout (keeps the text centered)
                     <div class="w-[120px]"></div>
                 </div>
             </div>
@@ -912,7 +1339,6 @@ pub fn Chat(
         </div>
     }.into_any()
 }
-
 
 #[server(CreateMessage, "/api")]
 pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> Result<(), ServerFnError> {
@@ -988,7 +1414,7 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
             .get_result(conn)
             .await?;
 
-        Ok(result.message_count <= 20)
+        Ok(result.message_count <= 40)
     }
 
     if !is_llm {

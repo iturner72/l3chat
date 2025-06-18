@@ -49,86 +49,52 @@ pub async fn create_stream(
     Ok(Json(StreamResponse { stream_id }))
 }
 
-pub async fn embeddings_generation_handler(
-    State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
-    Extension(claims): Extension<Claims>,
-) -> Result<Sse<CancellableSseStream>, StatusCode> {
-    let user_id = claims.user_id()
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    
-    let stream_id = params
-        .get("stream_id")
-        .cloned()
-        .ok_or(StatusCode::BAD_REQUEST)?;
-    
-    info!("Starting embeddings generation for user: {user_id} with stream: {stream_id}");
-    
-    let sse_stream = create_cancellable_sse_stream(
-        state.sse_state,
-        stream_id,
-        |tx, token| async move {
-            crate::embedding_service::embeddings::generate_embeddings(tx, token).await
-        }
-    ).await;
-    
-    Ok(sse_stream)
-}
-
-pub async fn local_embeddings_generation_handler(
-    State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
-    Extension(claims): Extension<Claims>,
-) -> Result<Sse<CancellableSseStream>, StatusCode> {
-    let user_id = claims.user_id()
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    
-    let stream_id = params
-        .get("stream_id")
-        .cloned()
-        .ok_or(StatusCode::BAD_REQUEST)?;
-    
-    info!("Starting local embeddings generation for user: {user_id} with stream: {stream_id}");
-    
-    let sse_stream = create_cancellable_sse_stream(
-        state.sse_state,
-        stream_id,
-        |tx, token| async move {
-            crate::embeddings_service::embeddings_local::generate_local_embeddings(tx, token).await
-        }
-    ).await;
-    
-    Ok(sse_stream)
-}
-
 pub async fn send_message_stream_handler(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
     Extension(claims): Extension<Claims>,
-) -> Result<Sse<SseStream>, StatusCode> {
+) -> Result<Sse<CancellableSseStream>, StatusCode> {
     let user_id = claims.user_id()
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    let stream_id = params
+        .get("stream_id")
+        .cloned()
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    
     let thread_id = params.get("thread_id")
+        .cloned()
         .ok_or(StatusCode::BAD_REQUEST)?;
     let model = params.get("model")
+        .cloned()
         .ok_or(StatusCode::BAD_REQUEST)?;
     let lab = params.get("lab")
+        .cloned()
         .ok_or(StatusCode::BAD_REQUEST)?;
     
     debug!("Starting message stream for user: {user_id} - thread: {thread_id}, model: {model}, lab: {lab}");
     
-    let (tx, rx) = tokio_mpsc::channel(100);
+    let pool = state.pool.clone();
+
+    let sse_stream = create_cancellable_sse_stream(state.sse_state, stream_id, move |tx, token| {
+        let pool = pool.clone();
+        let thread_id = thread_id.clone();
+        let model = model.clone();
+        let lab = lab.clone();
+
+        async move {
+            crate::components::chat::send_message_stream_with_project_cancellable(
+                &pool,
+                thread_id,
+                model,
+                lab,
+                tx,
+                token
+            ).await
+        }
+    }).await;
     
-    let pool = app_state.pool.clone();
-    let thread_id = thread_id.clone();
-    let model = model.clone();
-    let lab = lab.clone();
-    
-    tokio::spawn(async move {
-        crate::components::chat::send_message_stream_with_project(&pool, thread_id, model, lab, tx).await;
-    });
-    
-    Ok(Sse::new(SseStream { receiver: rx }))
+    Ok(sse_stream)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

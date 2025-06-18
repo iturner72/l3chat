@@ -24,8 +24,6 @@ cfg_if! {
         use l3chat::database::db::establish_connection;
         use l3chat::handlers::sse::{
             create_stream,
-            embeddings_generation_handler,
-            local_embeddings_generation_handler,
             send_message_stream_handler,
             title_updates_handler,
         };
@@ -80,8 +78,6 @@ cfg_if! {
             let protected_routes = Router::new()
                 .route("/api/create-stream", get(create_stream))
                 .route("/api/cancel-stream", get(cancel_stream))
-                .route("/api/generate-embeddings", get(embeddings_generation_handler))
-                .route("/api/generate-local-embeddings", get(local_embeddings_generation_handler))
                 .route("/api/send_message_stream", get(send_message_stream_handler))
                 .route("/api/title-updates", get(title_updates_handler))
                 .layer(middleware::from_fn_with_state(

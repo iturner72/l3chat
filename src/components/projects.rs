@@ -7,8 +7,8 @@ use wasm_bindgen::JsCast;
 
 use crate::models::projects::*;
 use crate::server_fn::projects::*;
-use crate::components::threadlist::get_threads_query;
 use crate::components::ui::{Button, IconButton, ButtonVariant, ButtonSize};
+use crate::components::threadlist::get_threads_query;
 use crate::pages::writersroom::ThreadContext;
 
 pub async fn get_user_projects_query() -> Result<Vec<ProjectView>, String> {
@@ -214,6 +214,7 @@ pub fn DeleteProjectButton(
             match delete_project(project_id).await {
                 Ok(_) => {
                     client.invalidate_query(get_user_projects_query, ());
+                    client.invalidate_query(get_threads_query, ());
                     Ok(())
                 }
                 Err(e) => Err(format!("Failed to delete project: {}", e))

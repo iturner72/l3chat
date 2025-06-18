@@ -4,8 +4,6 @@ pub mod auth;
 pub mod cancellable_sse;
 pub mod components;
 pub mod database;
-pub mod embedding_service;
-pub mod embeddings_service;
 pub mod handlers;
 pub mod models;
 pub mod pages;
@@ -15,7 +13,6 @@ pub mod server_fn;
 #[cfg(feature = "ssr")]
 pub mod services;
 pub mod state;
-pub mod supabase;
 pub mod types;
 
 #[cfg(feature = "hydrate")]
