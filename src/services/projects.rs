@@ -84,7 +84,7 @@ pub mod projects_service {
             let chunks = self.chunk_text(content, 1000, 200);
     
             for (index, (chunk_text, start_char, end_char)) in chunks.into_iter().enumerate() {
-                if chunk_text.trim().len() < 50 {
+                if chunk_text.trim().len() < 10 {
                     continue;
                 }
     
@@ -146,7 +146,7 @@ pub mod projects_service {
                     document_chunks::chunk_index,
                 ))
                 .order(chunk_embeddings::embedding.cosine_distance(&query_embedding))
-                .filter(chunk_embeddings::embedding.cosine_distance(&query_embedding).lt(0.28)) // 1 - 0.72 threshold
+                .filter(chunk_embeddings::embedding.cosine_distance(&query_embedding).lt(0.75)) // 1 - 0.25 threshold
                 .limit(limit as i64)
                 .load::<(Uuid, String, Option<f64>, Uuid, String, i32)>(&mut conn)
                 .await?;
