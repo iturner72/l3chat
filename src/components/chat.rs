@@ -9,6 +9,7 @@ use web_sys::{EventSource, MessageEvent, ErrorEvent, HtmlElement};
 use chrono::Utc;
 
 use crate::{auth::get_current_user, models::conversations::{NewMessageView, PendingMessage}};
+use crate::components::toast::Toast;
 
 cfg_if! {
     if #[cfg(feature = "ssr")] {
@@ -615,6 +616,18 @@ pub fn Chat(
     let (model, set_model) = signal("gpt-4o-mini".to_string());
     let (lab, set_lab) = signal("openai".to_string());
 
+    let (toast_visible, set_toast_visible) = signal(false);
+    let (toast_message, set_toast_message) = signal(String::new());
+
+    let show_toast = move |msg: String| {
+        set_toast_message(msg);
+        set_toast_visible(true);
+        set_timeout(
+            move || set_toast_visible(false),
+            std::time::Duration::from_secs(5)
+        );
+    };
+
     let handle_model_change = move |ev| {
         let value = event_target_value(&ev);
         set_model(value.clone());
@@ -784,6 +797,13 @@ pub fn Chat(
                 }
                 Err(e) => {
                     error!("Failed to create message: {e:?}");
+                    let error_msg = e.to_string();
+                    if error_msg.contains("Daily message limit") {
+                        show_toast("You've reached your daily limit of 20 messages. Try again tomorrow!".to_string());
+                    } else {
+                        show_toast("Failed to send message. Please try again.".to_string());
+                    }
+
                     set_is_sending(false);
                 }
             }
@@ -795,102 +815,110 @@ pub fn Chat(
     };
 
     view! {
-        <div class="flex flex-col space-y-3 pl-3 pr-3 bg-white dark:bg-teal-800 border-gray-300 dark:border-teal-600">
-            <div class="flex space-x-3">
-                <textarea
-                    class="flex-1 pt-3 pl-3 rounded-lg resize-none min-h-[2.5rem] max-h-32
-                    text-gray-800 dark:text-gray-200 
-                    bg-gray-100 dark:bg-teal-700 
-                    border border-gray-400 dark:border-teal-600
-                    focus:border-seafoam-500 dark:focus:border-mint-400 focus:outline-none focus:ring-2 focus:ring-seafoam-500/20 dark:focus:ring-mint-400/20
-                    placeholder-gray-500 dark:placeholder-gray-400
-                    transition duration-0 ease-in-out"
-                    placeholder="Type your message..."
-                    prop:value=message
-                    on:input=move |event| {
-                        set_message(event_target_value(&event));
-                        let target = event.target().unwrap();
-                        let style = target.unchecked_ref::<HtmlElement>().style();
-                        style.set_property("height", "auto").unwrap();
-                        style
-                            .set_property(
-                                "height",
-                                &format!(
-                                    "{}px",
-                                    target.unchecked_ref::<HtmlElement>().scroll_height(),
-                                ),
-                            )
-                            .unwrap();
-                    }
-                    on:keydown=move |event| {
-                        if event.key() == "Enter" && !event.shift_key() {
-                            event.prevent_default();
-                            if !message.get().trim().is_empty() && !is_sending.get() {
-                                send_message();
+        <div class="relative">
+            <div class="flex flex-col space-y-3 pl-3 pr-3 bg-white dark:bg-teal-800 border-gray-300 dark:border-teal-600">
+                <div class="flex space-x-3">
+                    <textarea
+                        class="flex-1 pt-3 pl-3 rounded-lg resize-none min-h-[2.5rem] max-h-32
+                        text-gray-800 dark:text-gray-200 
+                        bg-gray-100 dark:bg-teal-700 
+                        border border-gray-400 dark:border-teal-600
+                        focus:border-seafoam-500 dark:focus:border-mint-400 focus:outline-none focus:ring-2 focus:ring-seafoam-500/20 dark:focus:ring-mint-400/20
+                        placeholder-gray-500 dark:placeholder-gray-400
+                        transition duration-0 ease-in-out"
+                        placeholder="Type your message..."
+                        prop:value=message
+                        on:input=move |event| {
+                            set_message(event_target_value(&event));
+                            let target = event.target().unwrap();
+                            let style = target.unchecked_ref::<HtmlElement>().style();
+                            style.set_property("height", "auto").unwrap();
+                            style
+                                .set_property(
+                                    "height",
+                                    &format!(
+                                        "{}px",
+                                        target.unchecked_ref::<HtmlElement>().scroll_height(),
+                                    ),
+                                )
+                                .unwrap();
+                        }
+                        on:keydown=move |event| {
+                            if event.key() == "Enter" && !event.shift_key() {
+                                event.prevent_default();
+                                if !message.get().trim().is_empty() && !is_sending.get() {
+                                    send_message();
+                                }
                             }
                         }
-                    }
-                >
-                </textarea>
-                <button
-                    class="ib px-6 rounded-lg font-medium
-                    text-white transition duration-200 ease-in-out
-                    disabled:cursor-not-allowed disabled:opacity-50
-                    focus:outline-none focus:ring-2 focus:ring-offset-2"
-                    class:bg-seafoam-600=move || !is_sending.get()
-                    class:hover:bg-seafoam-700=move || !is_sending.get()
-                    class:focus:ring-seafoam-500=move || !is_sending.get()
-                    class:dark:bg-teal-600=move || !is_sending.get()
-                    class:dark:hover:bg-teal-700=move || !is_sending.get()
-                    class:bg-gray-400=move || is_sending.get()
-                    class:dark:bg-gray-600=move || is_sending.get()
-                    on:click=send_message_action
-                    disabled=move || is_sending.get() || message.get().trim().is_empty()
-                >
-                    {move || if is_sending.get() { "yapping..." } else { "yap" }}
-                </button>
-            </div>
-
-            // Bottom row with model selector on left and instructions centered
-            <div class="flex items-center justify-between">
-                <select
-                    class="text-xs px-3 py-2 rounded-md
-                    text-gray-700 dark:text-gray-300 
-                    bg-gray-100 dark:bg-teal-700 
-                    border border-gray-400 dark:border-teal-600
-                    hover:border-gray-600 dark:hover:border-teal-400
-                    focus:border-seafoam-500 dark:focus:border-mint-400 focus:outline-none
-                    transition duration-200 ease-in-out"
-                    on:change=handle_model_change
-                    prop:value=move || model.get()
-                >
-                    <option value="claude-3-haiku-20240307">"claude-3-haiku"</option>
-                    <option value="claude-3-sonnet-20240229">"claude-3-sonnet"</option>
-                    <option value="claude-3-opus-20240229">"claude-3-opus"</option>
-                    <option value="claude-3-5-sonnet-20240620">"claude-3-5-sonnet"</option>
-                    <option value="gpt-4o-mini">"gpt-4o-mini"</option>
-                    <option value="gpt-4o">"gpt-4o"</option>
-                    <option value="gpt-4-turbo">"gpt-4-turbo"</option>
-                </select>
-
-                <div class="flex-1 text-center">
-                    <div class="text-xs text-gray-500 dark:text-gray-400">
-                        "Press Enter to send • Shift+Enter for new line"
-                    </div>
+                    >
+                    </textarea>
+                    <button
+                        class="ib px-6 rounded-lg font-medium
+                        text-white transition duration-200 ease-in-out
+                        disabled:cursor-not-allowed disabled:opacity-50
+                        focus:outline-none focus:ring-2 focus:ring-offset-2"
+                        class:bg-seafoam-600=move || !is_sending.get()
+                        class:hover:bg-seafoam-700=move || !is_sending.get()
+                        class:focus:ring-seafoam-500=move || !is_sending.get()
+                        class:dark:bg-teal-600=move || !is_sending.get()
+                        class:dark:hover:bg-teal-700=move || !is_sending.get()
+                        class:bg-gray-400=move || is_sending.get()
+                        class:dark:bg-gray-600=move || is_sending.get()
+                        on:click=send_message_action
+                        disabled=move || is_sending.get() || message.get().trim().is_empty()
+                    >
+                        {move || if is_sending.get() { "yapping..." } else { "yap" }}
+                    </button>
                 </div>
 
-                // Empty div to balance the layout (keeps the text centered)
-                <div class="w-[120px]"></div>
+                // Bottom row with model selector on left and instructions centered
+                <div class="flex items-center justify-between">
+                    <select
+                        class="text-xs px-3 py-2 rounded-md
+                        text-gray-700 dark:text-gray-300 
+                        bg-gray-100 dark:bg-teal-700 
+                        border border-gray-400 dark:border-teal-600
+                        hover:border-gray-600 dark:hover:border-teal-400
+                        focus:border-seafoam-500 dark:focus:border-mint-400 focus:outline-none
+                        transition duration-200 ease-in-out"
+                        on:change=handle_model_change
+                        prop:value=move || model.get()
+                    >
+                        <option value="claude-3-haiku-20240307">"claude-3-haiku"</option>
+                        <option value="claude-3-sonnet-20240229">"claude-3-sonnet"</option>
+                        <option value="claude-3-opus-20240229">"claude-3-opus"</option>
+                        <option value="claude-3-5-sonnet-20240620">"claude-3-5-sonnet"</option>
+                        <option value="gpt-4o-mini">"gpt-4o-mini"</option>
+                        <option value="gpt-4o">"gpt-4o"</option>
+                        <option value="gpt-4-turbo">"gpt-4-turbo"</option>
+                    </select>
+
+                    <div class="flex-1 text-center">
+                        <div class="text-xs text-gray-500 dark:text-gray-400">
+                            "Press Enter to send • Shift+Enter for new line"
+                        </div>
+                    </div>
+
+                    // Empty div to balance the layout (keeps the text centered)
+                    <div class="w-[120px]"></div>
+                </div>
             </div>
+            <Toast
+                message=toast_message
+                visible=toast_visible
+                on_close=move || set_toast_visible(false)
+            />
         </div>
-    }
+    }.into_any()
 }
 
 
 #[server(CreateMessage, "/api")]
 pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> Result<(), ServerFnError> {
     use diesel::prelude::*;
-    use diesel_async::{AsyncConnection, RunQueryDsl};
+    use diesel_async::{AsyncPgConnection, AsyncConnection, RunQueryDsl};
+    use diesel::sql_types::Integer;
     use std::fmt;
 
     use crate::state::AppState;
@@ -898,11 +926,18 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
     use crate::schema::{messages, threads};
     use crate::auth::get_current_user;
 
+    #[derive(QueryableByName)]
+    struct MessageCount {
+        #[diesel(sql_type = Integer)]
+        message_count: i32,
+    }
+
     #[derive(Debug)]
     enum CreateMessageError {
         PoolError(String),
         DatabaseError(diesel::result::Error),
         Unauthorized,
+        RateLimitExceeded,
     }
 
     impl fmt::Display for CreateMessageError {
@@ -911,6 +946,7 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
                 CreateMessageError::PoolError(e) => write!(f, "Pool error: {e}"),
                 CreateMessageError::DatabaseError(e) => write!(f, "Database error: {e}"),
                 CreateMessageError::Unauthorized => write!(f, "unauthorized - user not logged in"),
+                CreateMessageError::RateLimitExceeded => write!(f, "Daily message limit of 20 reached. Try again tomorrow!"),
             }
         }
     }
@@ -933,6 +969,37 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
     let user_id = current_user.ok_or(CreateMessageError::Unauthorized)?.id;
 
     let new_message: NewMessage = new_message_view.clone().into();
+
+    // check if the user hit rate limit
+    async fn check_increment_rate_limit(user_id: i32, conn: &mut AsyncPgConnection) -> Result<bool, diesel::result::Error> {
+        use diesel_async::RunQueryDsl;
+
+        // upsert daily counter
+        let query = "INSERT INTO daily_usage (user_id, usage_date, message_count)
+            VALUES ($1, CURRENT_DATE, 1)
+            ON CONFLICT (user_id, usage_date)
+            DO UPDATE SET
+              message_count = daily_usage.message_count + 1,
+              updated_at = CURRENT_TIMESTAMP
+            RETURNING message_count";
+
+        let result: MessageCount = diesel::sql_query(query)
+            .bind::<diesel::sql_types::Integer, _>(user_id)
+            .get_result(conn)
+            .await?;
+
+        Ok(result.message_count <= 20)
+    }
+
+    if !is_llm {
+        let rate_limit_ok = check_increment_rate_limit(user_id, &mut conn)
+            .await
+            .map_err(CreateMessageError::DatabaseError)?;
+        
+        if !rate_limit_ok {
+            return Err(CreateMessageError::RateLimitExceeded.into());
+        }
+    }
 
     // Use async transaction
     let is_first_user_message = conn.transaction(|conn| {

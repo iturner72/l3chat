@@ -69,7 +69,7 @@ pub fn AdminLogin() -> impl IntoView {
                 </div>
             </div>
         </div>
-    }
+    }.into_any()
 }
 
 #[component]
@@ -78,7 +78,7 @@ pub fn ProtectedAdminPanel() -> impl IntoView {
 
     view! {
         <Suspense fallback=|| {
-            view! { <div class="p-4">"Loading..."</div> }
+            view! { <div class="p-4">"Loading..."</div> }.into_any()
         }>
             {move || {
                 current_user
@@ -112,6 +112,7 @@ pub fn ProtectedAdminPanel() -> impl IntoView {
                                                                 class="w-8 h-8 rounded-full"
                                                             />
                                                         }
+                                                            .into_any()
                                                     })}
                                                 <span class="text-gray-700 dark:text-gray-200">
                                                     {user
@@ -229,7 +230,7 @@ pub fn ProtectedAdminPanel() -> impl IntoView {
             }}
 
         </Suspense>
-    }
+    }.into_any()
 }
 
 #[component]
@@ -255,5 +256,5 @@ pub fn LogoutButton() -> impl IntoView {
         >
             "Logout"
         </button>
-    }
+    }.into_any()
 }

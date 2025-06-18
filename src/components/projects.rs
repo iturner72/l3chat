@@ -87,7 +87,7 @@ pub fn ProjectsPage() -> impl IntoView {
 
             </div>
         </div>
-    }
+    }.into_any()
 }
 
 #[component]
@@ -108,6 +108,7 @@ pub fn ProjectsList(
                         <div class="animate-pulse surface-secondary h-16 rounded-md"></div>
                     </div>
                 }
+                    .into_any()
             }>
                 {move || {
                     match projects_resource.get() {
@@ -162,6 +163,7 @@ pub fn ProjectsList(
                                                                                     {desc.clone()}
                                                                                 </p>
                                                                             }
+                                                                                .into_any()
                                                                         })}
 
                                                                 </div>
@@ -173,6 +175,7 @@ pub fn ProjectsList(
                                                         />
                                                     </div>
                                                 }
+                                                    .into_any()
                                             }
                                         />
 
@@ -195,7 +198,7 @@ pub fn ProjectsList(
 
             </Transition>
         </div>
-    }
+    }.into_any()
 }
 
 #[component]
@@ -230,7 +233,7 @@ pub fn DeleteProjectButton(
                 })
             >
 
-                <Icon icon=icondata::BsTrash3 width="16" height="16"/>
+                <Icon icon=icondata_bs::BsTrash3 width="16" height="16"/>
             </IconButton>
 
             {move || {
@@ -302,7 +305,7 @@ pub fn DeleteProjectButton(
             }}
 
         </div>
-    }
+    }.into_any()
 }
 
 #[component]
@@ -334,7 +337,7 @@ fn ProjectDetails(project_id: Uuid) -> impl IntoView {
             </div>
 
             <Suspense fallback=|| {
-                view! { <div class="loading-themed">"Loading documents..."</div> }
+                view! { <div class="loading-themed">"Loading documents..."</div> }.into_any()
             }>
                 {move || {
                     match documents_resource.get() {
@@ -366,6 +369,7 @@ fn ProjectDetails(project_id: Uuid) -> impl IntoView {
                                                         </div>
                                                     </div>
                                                 }
+                                                    .into_any()
                                             }
                                         />
 
@@ -402,17 +406,12 @@ fn ProjectDetails(project_id: Uuid) -> impl IntoView {
                     }
                         .into_any()
                 } else {
-                    view! {
-                        // Refresh documents
-
-                        <div></div>
-                    }
-                        .into_any()
+                    view! { <div></div> }.into_any()
                 }
             }}
 
         </div>
-    }
+    }.into_any()
 }
 
 #[component]
@@ -454,7 +453,7 @@ pub fn StartChatButton(project_id: Uuid) -> impl IntoView {
             }}
 
         </Button>
-    }
+    }.into_any()
 }
 
 #[component]
@@ -577,7 +576,7 @@ fn CreateProjectModal(
                 </div>
             </div>
         </div>
-    }
+    }.into_any()
 }
 
 #[component]
@@ -723,7 +722,7 @@ fn UploadDocumentModal(
                             }
                         >
 
-                            <Icon icon=icondata::BsFolder2Open width="16" height="16"/>
+                            <Icon icon=icondata_bs::BsFolder2Open width="16" height="16"/>
                             "Upload File"
                         </button>
                         <button
@@ -745,7 +744,7 @@ fn UploadDocumentModal(
                             }
                         >
 
-                            <Icon icon=icondata::BsPencil width="16" height="16"/>
+                            <Icon icon=icondata_bs::BsPencil width="16" height="16"/>
                             "Enter Text"
                         </button>
                     </div>
@@ -904,5 +903,5 @@ fn UploadDocumentModal(
                 </div>
             </div>
         </div>
-    }
+    }.into_any()
 }

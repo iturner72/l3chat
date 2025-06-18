@@ -93,3 +93,4 @@ This template itself is released under the Unlicense. You should replace the LIC
 # Tailwind 3
 export LEPTOS_TAILWIND_VERSION=v3.4.10
 
+

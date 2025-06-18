@@ -98,7 +98,7 @@ fn HighlightedText<'a>(
                 })
                 .collect_view()}
         </span>
-    }
+    }.into_any()
 }
 
 #[component]
@@ -380,7 +380,7 @@ pub fn MessageList(
                                             })
                                         >
 
-                                            <Icon icon=icondata::BsChevronUp width="16" height="16"/>
+                                            <Icon icon=icondata_bs::BsChevronUp width="16" height="16"/>
                                         </IconButton>
                                         <IconButton
                                             variant=ButtonVariant::Ghost
@@ -394,8 +394,15 @@ pub fn MessageList(
                                             })
                                         >
 
-                                            <Icon icon=icondata::BsChevronDown width="16" height="16"/>
+                                            <Icon
+                                                icon=icondata_bs::BsChevronDown
+                                                width="16"
+                                                height="16"
+                                            />
                                         </IconButton>
+                                        <span class="text-xs text-mint-600 dark:text-mint-400 ml-2">
+                                            "⌘J/⌘I • F3/⇧F3"
+                                        </span>
                                     </div>
                                 </div>
                             </div>
@@ -446,7 +453,7 @@ pub fn MessageList(
                                                                         <div class="inline-flex items-center gap-1">
                                                                             <div class="rotate-180-mirror">
                                                                                 <Icon
-                                                                                    icon=icondata::MdiSourceBranch
+                                                                                    icon=icondata_mdi::MdiSourceBranch
                                                                                     width="16"
                                                                                     height="16"
                                                                                 />
@@ -484,6 +491,7 @@ pub fn MessageList(
                             <div class="animate-pulse surface-secondary h-20 rounded-lg"></div>
                         </div>
                     }
+                        .into_any()
                 }>
                     {move || {
                         let messages_data = messages_with_matches();
@@ -492,7 +500,7 @@ pub fn MessageList(
                                 <div class="flex items-center justify-center h-32">
                                     <div class="flex flex-col items-center justify-center space-y-4 text-center text-teal-700 dark:text-teal-100 transition-colors duration-0">
                                         <Icon
-                                            icon=icondata::IoChatbubblesOutline
+                                            icon=icondata_io::IoChatbubblesOutline
                                             width="24"
                                             height="24"
                                             style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%)"
@@ -579,7 +587,7 @@ pub fn MessageList(
                                                                             <div class="inline-flex items-center gap-1">
                                                                                 <div class="rotate-180-mirror text-teal-700 dark:text-teal-100">
                                                                                     <Icon
-                                                                                        icon=icondata::MdiSourceBranchPlus
+                                                                                        icon=icondata_mdi::MdiSourceBranchPlus
                                                                                         width="14"
                                                                                         height="14"
                                                                                         style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
@@ -653,6 +661,7 @@ pub fn MessageList(
 
                                                 </div>
                                             }
+                                                .into_any()
                                         }
                                     />
 
@@ -665,7 +674,7 @@ pub fn MessageList(
                 </Transition>
             </div>
         </div>
-    }
+    }.into_any()
 }
 
 #[server(GetMessagesForThread, "/api")]

@@ -290,6 +290,7 @@ pub fn ThreadList(
                             <p class="text-themed-secondary text-sm">"Loading threads..."</p>
                         </div>
                     }
+                        .into_any()
                 }>
                     {move || {
                         match current_threads() {
@@ -321,6 +322,7 @@ pub fn ThreadList(
                                                             title_updates=_title_updates
                                                         />
                                                     }
+                                                        .into_any()
                                                 }
                                             />
 
@@ -350,7 +352,7 @@ pub fn ThreadList(
                 <UserInfo/>
             </div>
         </div>
-    }
+    }.into_any()
 }
 
 #[component]
@@ -432,115 +434,119 @@ fn ThreadTreeNode(
     let children_for_each = node.children.clone();
     let children_for_last_check = node.children.clone();
 
-view! {
-    <div class="thread-group">
-        <div class="thread-item-container flex flex-col relative">
-            {move || {
-                if depth > 0 {
-                    view! {
-                        <div class="absolute left-0 top-0 w-full h-full pointer-events-none">
-                            <div
-                                class="absolute border-l-2 border-themed"
-                                style:left=format!("{}rem", (depth as f32 - 1.0) * 1.5 + 0.75)
-                                style:top="0"
-                                style:height=if is_last_child { "1.5rem" } else { "100%" }
-                            ></div>
+    view! {
+        <div class="thread-group">
+            <div class="thread-item-container flex flex-col relative">
+                {move || {
+                    if depth > 0 {
+                        view! {
+                            <div class="absolute left-0 top-0 w-full h-full pointer-events-none">
+                                <div
+                                    class="absolute border-l-2 border-themed"
+                                    style:left=format!("{}rem", (depth as f32 - 1.0) * 1.5 + 0.75)
+                                    style:top="0"
+                                    style:height=if is_last_child { "1.5rem" } else { "100%" }
+                                ></div>
 
-                            <div
-                                class="absolute border-t-2 border-themed"
-                                style:left=format!("{}rem", (depth as f32 - 1.0) * 1.5 + 0.75)
-                                style:top="1.5rem"
-                                style:width="0.75rem"
-                            ></div>
-                        </div>
+                                <div
+                                    class="absolute border-t-2 border-themed"
+                                    style:left=format!("{}rem", (depth as f32 - 1.0) * 1.5 + 0.75)
+                                    style:top="1.5rem"
+                                    style:width="0.75rem"
+                                ></div>
+                            </div>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <div></div> }.into_any()
                     }
-                        .into_any()
-                } else {
-                    view! { <div></div> }.into_any()
-                }
-            }}
-            <div
-                class="flex w-full justify-between items-center relative z-10 overflow-hidden hover:bg-surface-secondary rounded"
-                style:margin-left=margin_left
-            >
-                // Thread button container with ellipsis truncation
-                <div class="flex-1 min-w-0">
-                    <ThreadItemButton
-                        _thread=thread_for_display.clone()
-                        is_active=is_active
-                        is_generating=is_generating_title
-                        display_title=display_title
-                        thread_type=thread_type
-                        on_click=Callback::new(move |_| {
-                            set_current_thread_id.run(thread_id_for_set.clone());
-                        })
+                }}
+                <div
+                    class="flex w-full justify-between items-center relative z-10 overflow-hidden hover:bg-surface-secondary rounded"
+                    style:margin-left=margin_left
+                >
+                    // Thread button container with ellipsis truncation
+                    <div class="flex-1 min-w-0">
+                        <ThreadItemButton
+                            _thread=thread_for_display.clone()
+                            is_active=is_active
+                            is_generating=is_generating_title
+                            display_title=display_title
+                            thread_type=thread_type
+                            on_click=Callback::new(move |_| {
+                                set_current_thread_id.run(thread_id_for_set.clone());
+                            })
+                        />
+
+                    </div>
+
+                    // Trash icon - appears on hover of this specific element
+                    <div class="relative flex-shrink-0 group">
+                        <IconButton
+                            variant=ButtonVariant::Ghost
+                            size=ButtonSize::Tiny
+                            class="opacity-50 text-teal-700 dark:text-teal-100 group-hover:opacity-100 transition-opacity"
+                            on_click=Callback::new(move |_| {
+                                delete_action.dispatch(thread_id_for_delete.clone());
+                            })
+                        >
+
+                            <Icon
+                                icon=icondata_bs::BsTrash3
+                                width="12"
+                                height="12"
+                                style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
+                            />
+                        </IconButton>
+                    </div>
+                </div>
+                {move || {
+                    if has_children {
+                        view! {
+                            <div
+                                class="absolute border-l-2 border-themed pointer-events-none"
+                                style:left=format!("{}rem", depth as f32 * 1.5 + 0.75)
+                                style:top="3rem"
+                                style:bottom="0"
+                            ></div>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <div></div> }.into_any()
+                    }
+                }}
+                <div class="children-container">
+                    <For
+                        each=move || children_for_each.clone()
+                        key=|child| child.thread.id.clone()
+                        children=move |child_node| {
+                            let is_last = {
+                                let children = children_for_last_check.clone();
+                                let child_id = child_node.thread.id.clone();
+                                children
+                                    .last()
+                                    .map(|last| last.thread.id == child_id)
+                                    .unwrap_or(false)
+                            };
+                            view! {
+                                <ThreadTreeNode
+                                    node=child_node
+                                    current_thread_id=current_thread_id
+                                    set_current_thread_id=set_current_thread_id
+                                    delete_action=delete_action
+                                    depth=depth + 1
+                                    is_last_child=is_last
+                                    title_updates=title_updates
+                                />
+                            }
+                                .into_any()
+                        }
                     />
 
                 </div>
-
-                // Trash icon - appears on hover of this specific element
-                <div class="relative flex-shrink-0 group">
-                    <IconButton
-                        variant=ButtonVariant::Ghost
-                        size=ButtonSize::Tiny
-                        class="opacity-50 text-teal-700 dark:text-teal-100 group-hover:opacity-100 transition-opacity"
-                        on_click=Callback::new(move |_| {
-                            delete_action.dispatch(thread_id_for_delete.clone());
-                        })
-                    >
-
-                        <Icon
-                            icon=icondata::BsTrash3
-                            width="12"
-                            height="12"
-                            style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
-                        />
-                    </IconButton>
-                </div>
-            </div>
-            {move || {
-                if has_children {
-                    view! {
-                        <div
-                            class="absolute border-l-2 border-themed pointer-events-none"
-                            style:left=format!("{}rem", depth as f32 * 1.5 + 0.75)
-                            style:top="3rem"
-                            style:bottom="0"
-                        ></div>
-                    }
-                        .into_any()
-                } else {
-                    view! { <div></div> }.into_any()
-                }
-            }}
-            <div class="children-container">
-                <For
-                    each=move || children_for_each.clone()
-                    key=|child| child.thread.id.clone()
-                    children=move |child_node| {
-                        let is_last = {
-                            let children = children_for_last_check.clone();
-                            let child_id = child_node.thread.id.clone();
-                            children.last().map(|last| last.thread.id == child_id).unwrap_or(false)
-                        };
-                        view! {
-                            <ThreadTreeNode
-                                node=child_node
-                                current_thread_id=current_thread_id
-                                set_current_thread_id=set_current_thread_id
-                                delete_action=delete_action
-                                depth=depth + 1
-                                is_last_child=is_last
-                                title_updates=title_updates
-                            />
-                        }
-                    }
-                />
-
             </div>
         </div>
-    </div>
-}.into_any()
+    }.into_any()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -567,7 +573,7 @@ fn ThreadItemButton(
             (ThreadType::Branch, true) => (
                 view! {
                     <div class="rotate-180-mirror w-4 h-4 flex items-center justify-center">
-                        <Icon icon=icondata::MdiSourceBranch width="16" height="16"/>
+                        <Icon icon=icondata_mdi::MdiSourceBranch width="16" height="16"/>
                     </div>
                 }.into_any(),
                 ButtonVariant::Success,
@@ -576,7 +582,7 @@ fn ThreadItemButton(
             (ThreadType::Branch, false) => (
                 view! {
                     <div class="rotate-180-mirror w-4 h-4 flex items-center justify-center">
-                        <Icon icon=icondata::MdiSourceBranch width="16" height="16"/>
+                        <Icon icon=icondata_mdi::MdiSourceBranch width="16" height="16"/>
                     </div>
                 }.into_any(),
                 ButtonVariant::Outline,
@@ -585,7 +591,7 @@ fn ThreadItemButton(
             (ThreadType::Project, true) => (
                 view! {
                     <div class="w-4 h-4 flex items-center justify-center">
-                        <Icon icon=icondata::BsFolder2Open width="16" height="16"/>
+                        <Icon icon=icondata_bs::BsFolder2Open width="16" height="16"/>
                     </div>
                 }.into_any(),
                 ButtonVariant::Success,
@@ -594,7 +600,7 @@ fn ThreadItemButton(
             (ThreadType::Project, false) => (
                 view! {
                     <div class="w-4 h-4 flex items-center justify-center">
-                        <Icon icon=icondata::BsFolder2 width="16" height="16"/>
+                        <Icon icon=icondata_bs::BsFolder2 width="16" height="16"/>
                     </div>
                 }.into_any(),
                 ButtonVariant::Outline,
@@ -603,7 +609,7 @@ fn ThreadItemButton(
             (ThreadType::Main, true) => (
                 view! {
                     <div class="w-4 h-4 flex items-center justify-center">
-                        <Icon icon=icondata::BsChatRightDots width="16" height="16"/>
+                        <Icon icon=icondata_bs::BsChatRightDots width="16" height="16"/>
                     </div>
                 }.into_any(),
                 ButtonVariant::Primary,
@@ -612,7 +618,7 @@ fn ThreadItemButton(
             (ThreadType::Main, false) => (
                 view! {
                     <div class="w-4 h-4 flex items-center justify-center">
-                        <Icon icon=icondata::BsChatLeft width="16" height="16"/>
+                        <Icon icon=icondata_bs::BsChatLeft width="16" height="16"/>
                     </div>
                 }.into_any(),
                 ButtonVariant::Outline,
@@ -642,8 +648,9 @@ fn ThreadItemButton(
                     <span class="truncate ir">{title}</span>
                 </Button>
             }
+                .into_any()
         }}
-    }
+    }.into_any()
 }
 
 #[component]
@@ -663,6 +670,7 @@ fn UserInfo() -> impl IntoView {
                         </div>
                     </div>
                 }
+                    .into_any()
             }>
                 {move || {
                     if auth.is_loading.get() {
@@ -794,7 +802,7 @@ fn UserInfo() -> impl IntoView {
 
             </Transition>
         </div>
-    }
+    }.into_any()
 }
 
 // Helper function to build thread tree structure - make it deterministic

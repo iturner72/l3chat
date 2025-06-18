@@ -140,7 +140,7 @@ pub fn WritersRoom() -> impl IntoView {
                                 if show_threads.get() {
                                     view! {
                                         <Icon
-                                            icon=icondata::TbLayoutSidebarRightExpandFilled
+                                            icon=icondata_tb::TbLayoutSidebarRightExpandFilled
                                             width="16"
                                             height="16"
                                             style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
@@ -149,7 +149,7 @@ pub fn WritersRoom() -> impl IntoView {
                                 } else {
                                     view! {
                                         <Icon
-                                            icon=icondata::TbLayoutSidebarLeftExpandFilled
+                                            icon=icondata_tb::TbLayoutSidebarLeftExpandFilled
                                             width="16"
                                             height="16"
                                             style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
@@ -172,7 +172,7 @@ pub fn WritersRoom() -> impl IntoView {
                         >
 
                             <Icon
-                                icon=icondata::FiPlus
+                                icon=icondata_fi::FiPlus
                                 width="16"
                                 height="16"
                                 style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
@@ -310,7 +310,7 @@ pub fn WritersRoom() -> impl IntoView {
                 on_close=move || set_toast_visible(false)
             />
         </div>
-    }
+    }.into_any()
 }
 
 #[server(CreateThread, "/api")]

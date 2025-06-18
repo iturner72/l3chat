@@ -24,7 +24,7 @@ pub fn Toast(
             )
         }>
             <div class="flex items-center justify-between gap-2">
-                <span class="text-themed-primary">{message}</span>
+                <span class="text-mint-800 dark:text-mint-600-">{message}</span>
                 <IconButton
                     variant=ButtonVariant::Ghost
                     size=crate::components::ui::ButtonSize::Small
@@ -33,9 +33,9 @@ pub fn Toast(
                 >
                     {move || {
                         if visible.get() {
-                            view! { <Icon icon=icondata::BsXCircle width="16" height="16"/> }
+                            view! { <Icon icon=icondata_bs::BsXCircle width="16" height="16"/> }
                         } else {
-                            view! { <Icon icon=icondata::BsXCircle width="16" height="16"/> }
+                            view! { <Icon icon=icondata_bs::BsXCircle width="16" height="16"/> }
                         }
                     }}
 

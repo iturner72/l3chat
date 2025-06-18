@@ -79,7 +79,7 @@ pub fn DarkModeToggle() -> impl IntoView {
                 if is_dark.get() {
                     view! {
                         <Icon
-                            icon=icondata::FiSun
+                            icon=icondata_fi::FiSun
                             width="16"
                             height="16"
                             style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
@@ -88,7 +88,7 @@ pub fn DarkModeToggle() -> impl IntoView {
                 } else {
                     view! {
                         <Icon
-                            icon=icondata::LuMoon
+                            icon=icondata_fi::FiMoon
                             width="16"
                             height="16"
                             style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"

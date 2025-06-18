@@ -17,6 +17,19 @@ diesel::table! {
     use diesel::sql_types::*;
     use pgvector::sql_types::*;
 
+    daily_usage (user_id, usage_date) {
+        user_id -> Int4,
+        usage_date -> Date,
+        message_count -> Nullable<Int4>,
+        created_at -> Nullable<Timestamp>,
+        updated_at -> Nullable<Timestamp>,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
+    use pgvector::sql_types::*;
+
     document_chunks (id) {
         id -> Uuid,
         document_id -> Uuid,
@@ -120,6 +133,7 @@ diesel::table! {
 }
 
 diesel::joinable!(chunk_embeddings -> document_chunks (chunk_id));
+diesel::joinable!(daily_usage -> users (user_id));
 diesel::joinable!(document_chunks -> project_documents (document_id));
 diesel::joinable!(messages -> users (user_id));
 diesel::joinable!(project_documents -> projects (project_id));
@@ -129,6 +143,7 @@ diesel::joinable!(threads -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     chunk_embeddings,
+    daily_usage,
     document_chunks,
     messages,
     project_documents,
