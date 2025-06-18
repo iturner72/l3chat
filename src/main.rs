@@ -73,7 +73,7 @@ cfg_if! {
             // OAuth routes (public)
             let oauth_routes = Router::new()
                 .route("/auth/google", get(google_login))
-                .route("/auth/google/callback", get(google_callback))
+                .route("/auth/google-callback", get(google_callback))
                 .route("/auth/discord", get(discord_login))
                 .route("/auth/discord/callback", get(discord_callback));
 

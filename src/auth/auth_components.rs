@@ -166,22 +166,6 @@ pub fn ProtectedAdminPanel() -> impl IntoView {
                                                             {user.email.unwrap_or_else(|| "N/A".to_string())}
                                                         </span>
                                                     </div>
-                                                    <div>
-                                                        <span class="font-medium text-gray-600 dark:text-gray-400">
-                                                            "User ID:"
-                                                        </span>
-                                                        <span class="ml-2 text-gray-800 dark:text-gray-200">
-                                                            {user.id}
-                                                        </span>
-                                                    </div>
-                                                    <div>
-                                                        <span class="font-medium text-gray-600 dark:text-gray-400">
-                                                            "External ID:"
-                                                        </span>
-                                                        <span class="ml-2 text-gray-800 dark:text-gray-200">
-                                                            {user.external_id}
-                                                        </span>
-                                                    </div>
                                                 </div>
                                             </div>
                                         </div>

@@ -10,6 +10,9 @@ pub mod oauth_server {
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;
     use log::{debug, info, error};
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use sha2::{Digest, Sha256};
+    use rand::{thread_rng, Rng};
     
     use crate::state::AppState;
     use crate::models::users::{User, NewUser, CreateUserView};
@@ -62,11 +65,11 @@ pub mod oauth_server {
     ) -> impl IntoResponse {
 
         let oauth_state = uuid::Uuid::new_v4().to_string();
-        let verifier = uuid::Uuid::new_v4().to_string();
+        let (code_verifier, code_challenge) = generate_pkce(); 
         
         let session_state = OAuthState {
             provider: provider.to_string(),
-            verifier: verifier.clone(),
+            verifier: code_verifier, 
             return_url: None,
         };
 
@@ -79,10 +82,10 @@ pub mod oauth_server {
                     "https://accounts.google.com/o/oauth2/auth?client_id={}&redirect_uri={}&scope={}&response_type=code&state={}&code_challenge={}&code_challenge_method=S256",
                     std::env::var("GOOGLE_CLIENT_ID").expect("GOOGLE_CLIENT_ID must be set"),
                     urlencoding::encode(&std::env::var("GOOGLE_REDIRECT_URL")
-                        .unwrap_or_else(|_| "http://localhost:3000/auth/google/callback".to_string())),
+                        .unwrap_or_else(|_| "http://localhost:3000/auth/google-callback".to_string())),
                     urlencoding::encode(&scope),
                     urlencoding::encode(&oauth_state),
-                    urlencoding::encode(&verifier)
+                    urlencoding::encode(&code_challenge)
                 )
             }
             "discord" => {
@@ -103,6 +106,25 @@ pub mod oauth_server {
         };
 
         Redirect::to(&auth_url).into_response()
+    }
+
+    fn generate_pkce() -> (String, String) {
+        // Generate a random 32-byte array for the verifier
+        let mut verifier_bytes = [0u8; 32];
+        thread_rng().fill(&mut verifier_bytes);
+        
+        // Base64url-encode the verifier (without padding)
+        let code_verifier = URL_SAFE_NO_PAD.encode(&verifier_bytes);
+        
+        // Create SHA256 hash of the verifier
+        let mut hasher = Sha256::new();
+        hasher.update(&code_verifier);
+        let challenge_bytes = hasher.finalize();
+        
+        // Base64url-encode the challenge (without padding)
+        let code_challenge = URL_SAFE_NO_PAD.encode(&challenge_bytes);
+        
+        (code_verifier, code_challenge)
     }
 
     pub async fn google_callback(
@@ -132,7 +154,7 @@ pub mod oauth_server {
                 std::env::var("GOOGLE_CLIENT_ID")?,
                 std::env::var("GOOGLE_CLIENT_SECRET")?,
                 std::env::var("GOOGLE_REDIRECT_URL")
-                    .unwrap_or_else(|_| "http://localhost:3000/auth/google/callback".to_string()),
+                    .unwrap_or_else(|_| "http://localhost:3000/auth/google-callback".to_string()),
             ),
             "discord" => (
                 "https://discord.com/api/oauth2/token",
@@ -144,7 +166,7 @@ pub mod oauth_server {
             _ => return Err("Unsupported provider".into()),
         };
     
-        info!("Exchanging code for token - Provider: {}, Client ID: {}", provider, &client_id[..8]);
+        debug!("Exchanging code for token - Provider: {}, Client ID: {}", provider, &client_id[..8]);
     
         let mut params = vec![
             ("grant_type", "authorization_code"),
@@ -192,7 +214,7 @@ pub mod oauth_server {
             return Err(format!("OAuth error: {} - {}", error, token_data.error_description.unwrap_or_default()).into());
         }
     
-        info!("Successfully obtained access token");
+        debug!("Successfully obtained access token");
         Ok(token_data.access_token)
     }
 
@@ -220,7 +242,7 @@ pub mod oauth_server {
                 }
     
                 let resp: GoogleUserInfo = serde_json::from_str(&response_text)?;
-                info!("Parsed Google user info: ID={}, Email={:?}", resp.id, resp.email);
+                debug!("Parsed Google user info: ID={}, Email={:?}", resp.id, resp.email);
     
                 Ok(CreateUserView {
                     external_id: resp.id,
@@ -249,7 +271,7 @@ pub mod oauth_server {
                 }
     
                 let resp: DiscordUserInfo = serde_json::from_str(&response_text)?;
-                info!("Parsed Discord user info: ID={}, Username={:?}", resp.id, resp.username);
+                debug!("Parsed Discord user info: ID={}, Username={:?}", resp.id, resp.username);
     
                 let avatar_url = resp.avatar.as_ref().map(|avatar| {
                     format!("https://cdn.discordapp.com/avatars/{}/{}.png", resp.id, avatar)
@@ -280,12 +302,12 @@ pub mod oauth_server {
         app_state: AppState,
         params: OAuthCallback,
     ) -> impl IntoResponse {
-        info!("OAuth callback received for provider: {provider}");
-        info!("Callback params - code length: {}, state: {}", params.code.len(), params.state);
+        debug!("OAuth callback received for provider: {provider}");
+        debug!("Callback params - code length: {}, state: {}", params.code.len(), params.state);
     
         let oauth_state = match app_state.oauth_states.get(&params.state) {
             Some(state_ref) => {
-                info!("Found OAuth state for: {}", params.state);
+                debug!("Found OAuth state for: {}", params.state);
                 state_ref.value().clone()
             },
             None => {
@@ -296,12 +318,12 @@ pub mod oauth_server {
         };
     
         app_state.oauth_states.remove(&params.state);
-        info!("Cleaned up OAuth state");
+        debug!("Cleaned up OAuth state");
     
-        info!("Starting token exchange...");
+        debug!("Starting token exchange...");
         let token = match exchange_code_for_token(provider, &params.code, &oauth_state.verifier).await {
             Ok(token) => {
-                info!("Token exchange successful");
+                debug!("Token exchange successful");
                 token
             },
             Err(e) => {
@@ -310,10 +332,10 @@ pub mod oauth_server {
             }
         };
     
-        info!("Fetching user info...");
+        debug!("Fetching user info...");
         let user_info = match get_user_info(provider, &token).await {
             Ok(info) => {
-                info!("User info fetched successfully for external_id: {}", info.external_id);
+                debug!("User info fetched successfully for external_id: {}", info.external_id);
                 info
             },
             Err(e) => {
@@ -322,10 +344,10 @@ pub mod oauth_server {
             }
         };
     
-        info!("Upserting user in database...");
+        debug!("Upserting user in database...");
         let user = match upsert_user(&app_state, user_info).await {
             Ok(user) => {
-                info!("User upserted successfully with ID: {}", user.id);
+                debug!("User upserted successfully with ID: {}", user.id);
                 user
             },
             Err(e) => {
@@ -334,10 +356,10 @@ pub mod oauth_server {
             }
         };
     
-        info!("Creating JWT token...");
+        debug!("Creating JWT token...");
         let jwt_token = match crate::auth::create_jwt_token(user.id) {
             Ok(token) => {
-                info!("JWT token created successfully");
+                debug!("JWT token created successfully");
                 token
             },
             Err(e) => {
@@ -346,7 +368,7 @@ pub mod oauth_server {
             }
         };
     
-        info!("Setting auth cookie and redirecting to admin panel");
+        debug!("Setting auth cookie and redirecting to admin panel");
         let cookie = Cookie::build(("auth_token", jwt_token))
             .path("/")
             .secure(false) // Set to false for localhost
