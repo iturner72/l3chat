@@ -28,8 +28,7 @@ cfg_if! {
             title_updates_handler,
         };
         use std::net::SocketAddr;
-        use std::sync::{Arc,Mutex};
-        use tokio::sync::broadcast;
+        use std::sync::Arc;
 
         #[tokio::main]
         async fn main() {
@@ -49,8 +48,6 @@ cfg_if! {
                 leptos_options: leptos_options.clone(),
                 pool,
                 sse_state: SseState::new(),
-                drawing_tx: broadcast::Sender::new(100),
-                user_count: Arc::new(Mutex::new(0)),
                 oauth_states: Arc::new(dashmap::DashMap::new()),
                 title_update_senders: Arc::new(DashMap::new())
             };
