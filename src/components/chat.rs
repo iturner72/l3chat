@@ -1392,8 +1392,8 @@ pub fn Chat(
                         class:dark:hover:bg-teal-700=move || !is_sending.get()
                         class:bg-seafoam-400=move || is_sending.get()
                         class:hover:bg-salmon-600=move || is_sending.get()
-                        class:dark:bg-salmon-600=move || is_sending.get()
-                        class:dark:hover:bg-salmon-700=move || is_sending.get()
+                        class:dark:bg-seafoam-500=move || is_sending.get()
+                        class:dark:hover:bg-salmon-600=move || is_sending.get()
                         on:click=send_message_action
                         disabled=move || (!is_sending.get() && message.get().trim().is_empty())
                     >
