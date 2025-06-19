@@ -1,6 +1,7 @@
 use cfg_if::cfg_if;
 use leptos::{prelude::*, task::spawn_local};
 use log::{info, error};
+use serde::{Serialize, Deserialize};
 use urlencoding;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -11,6 +12,22 @@ use chrono::Utc;
 use crate::{auth::get_current_user, models::conversations::{NewMessageView, PendingMessage}};
 use crate::components::toast::Toast;
 use crate::types::StreamResponse;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RagResponse {
+    pub message_type: String,
+    pub content: Option<String>,
+    pub citations: Option<Vec<DocumentCitation>>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DocumentCitation {
+    pub filename: String,
+    pub chunk_text: String,
+    pub similarity: f32,
+    pub chunk_index: i32,
+}
 
 cfg_if! {
     if #[cfg(feature = "ssr")] {
@@ -30,6 +47,7 @@ cfg_if! {
 
         use crate::database::db::DbPool;
         use crate::models::conversations::Message;
+        use crate::services::rag::create_rag_service;
 
         pub struct SseStream {
             pub receiver: mpsc::Receiver<Result<Event, anyhow::Error>>,
@@ -761,7 +779,6 @@ cfg_if! {
             cancel_token: CancellationToken,
         ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             use log::{info, error};
-            use crate::services::projects::ProjectsService;
             use crate::schema::threads;
             use diesel::prelude::*;
             use diesel_async::RunQueryDsl;
@@ -807,16 +824,18 @@ cfg_if! {
                 }
             };
         
-            // Check for cancellation before project context retrieval
+            // Check for cancellation before processing
             if cancel_token.is_cancelled() {
-                info!("Message stream cancelled before project context retrieval");
+                info!("Message stream cancelled before processing");
                 return Ok(());
             }
         
-            // If this is a project thread, get the last user message for context
-            let project_context = if let Some(proj_id) = project_id {
-                // Get the last user message to use as search query
-                let last_user_message = crate::components::chat::fetch_message_history(&decoded_thread_id, pool)
+            // If this is a project thread, use the RAG service
+            if let Some(proj_id) = project_id {
+                info!("Processing project thread with RAG service");
+                
+                // Get the last user message to use as the query
+                let last_user_message = fetch_message_history(&decoded_thread_id, pool)
                     .await
                     .ok()
                     .and_then(|messages| {
@@ -827,94 +846,59 @@ cfg_if! {
                     });
         
                 if let Some(user_query) = last_user_message {
-                    // Check for cancellation before project context retrieval
+                    // Check for cancellation before RAG processing
                     if cancel_token.is_cancelled() {
-                        info!("Message stream cancelled during project context retrieval");
+                        info!("Message stream cancelled before RAG processing");
                         return Ok(());
                     }
         
-                    let projects_service = ProjectsService::new();
-                    match projects_service.get_project_context(pool, proj_id, &user_query).await {
-                        Ok(context) => Some(context),
+                    // Create the appropriate RAG service
+                    let rag_service = match create_rag_service(&decoded_lab, decoded_model.into_owned()) {
+                        Ok(service) => service,
                         Err(e) => {
-                            error!("Failed to get project context: {e}");
-                            None
+                            error!("Failed to create RAG service: {e}");
+                            return Err(e);
                         }
-                    }
+                    };
+        
+                    // Process the query with RAG
+                    return rag_service.process_project_query(
+                        pool,
+                        proj_id,
+                        user_query,
+                        &decoded_thread_id,
+                        tx,
+                        cancel_token,
+                    ).await;
                 } else {
-                    None
+                    error!("No user message found for project thread");
+                    // Fall back to regular chat
                 }
-            } else {
-                None
-            };
-        
-            // Check for cancellation before sending message
-            if cancel_token.is_cancelled() {
-                info!("Message stream cancelled before sending message");
-                return Ok(());
             }
         
-            // Modify the message history to include project context
-            let result = if let Some(context) = project_context {
-                match decoded_lab.as_ref() {
-                    "anthropic" => {
-                        let anthropic_service = AnthropicService::new(decoded_model.into_owned());
-                        anthropic_service.send_message_with_context_cancellable(
-                            pool, 
-                            &decoded_thread_id, 
-                            &context, 
-                            tx.clone(),
-                            cancel_token.clone()
-                        ).await
-                    },
-                    "openai" => {
-                        let openai_service = OpenAIService::new(decoded_model.into_owned());
-                        openai_service.send_message_with_context_cancellable(
-                            pool, 
-                            &decoded_thread_id, 
-                            &context, 
-                            tx.clone(),
-                            cancel_token.clone()
-                        ).await
-                    },
-                    _ => Err(anyhow::anyhow!("unsupported lab: {}", decoded_lab)),
-                }
-            } else {
-                // Regular chat without project context
-                match decoded_lab.as_ref() {
-                    "anthropic" => {
-                        let anthropic_service = AnthropicService::new(decoded_model.into_owned());
-                        anthropic_service.send_message_cancellable(
-                            pool, 
-                            &decoded_thread_id, 
-                            tx.clone(),
-                            cancel_token.clone()
-                        ).await
-                    },
-                    "openai" => {
-                        let openai_service = OpenAIService::new(decoded_model.into_owned());
-                        openai_service.send_message_cancellable(
-                            pool, 
-                            &decoded_thread_id, 
-                            tx.clone(),
-                            cancel_token.clone()
-                        ).await
-                    },
-                    _ => Err(anyhow::anyhow!("unsupported lab: {}", decoded_lab)),
-                }
-            };
-        
-            if let Err(e) = result {
-                error!("Error in send_message_stream: {e}");
-                let error_event = Event::default().data(format!("Error: {e}"));
-                let _ = tx.send(Ok(error_event)).await;
-                return Err(e.into());
-            }
-        
-            Ok(())
+            // Regular chat without project context (existing logic)
+            match decoded_lab.as_ref() {
+                "anthropic" => {
+                    let anthropic_service = AnthropicService::new(decoded_model.into_owned());
+                    anthropic_service.send_message_cancellable(
+                        pool, 
+                        &decoded_thread_id, 
+                        tx.clone(),
+                        cancel_token.clone()
+                    ).await
+                },
+                "openai" => {
+                    let openai_service = OpenAIService::new(decoded_model.into_owned());
+                    openai_service.send_message_cancellable(
+                        pool, 
+                        &decoded_thread_id, 
+                        tx.clone(),
+                        cancel_token.clone()
+                    ).await
+                },
+                _ => Err(anyhow::anyhow!("unsupported lab: {}", decoded_lab)),
+            }.map_err(|e| e.into())
         }
-
-
     }
 }
 
@@ -961,15 +945,15 @@ pub fn Chat(
         let current_thread_id = thread_id.get_untracked();
         let selected_model = model.get_untracked();
         let active_lab = lab.get_untracked();
-
+    
         spawn_local(async move {
             set_is_sending(true);
-
+    
             let user_id = match get_current_user().await {
                 Ok(Some(user)) => Some(user.id),
                 _ => None,
             };
-
+    
             let is_placeholder_thread = if let Ok(_uuid) = uuid::Uuid::parse_str(&current_thread_id) {
                 match check_thread_exists(current_thread_id.clone()).await {
                     Ok(exists) => !exists,
@@ -978,7 +962,7 @@ pub fn Chat(
             } else { 
                 false
             };
-
+    
             // 1. Save user message to DB immediately
             let user_message_view = NewMessageView {
                 thread_id: current_thread_id.clone(),
@@ -988,11 +972,11 @@ pub fn Chat(
                 active_lab: active_lab.clone(),
                 user_id,
             };
-
+    
             match create_message(user_message_view, false).await {
                 Ok(_) => {
                     set_message.set(String::new());
-
+    
                     if is_placeholder_thread {
                         if let Some(callback) = on_thread_created {
                             callback.run(current_thread_id.clone());
@@ -1002,7 +986,7 @@ pub fn Chat(
                     if let Some(callback) = on_message_created {
                         callback.run(());
                     }
-
+    
                     // 2. Create pending assistant message
                     let pending_id = uuid::Uuid::new_v4().to_string();
                     let pending_msg = PendingMessage {
@@ -1020,7 +1004,7 @@ pub fn Chat(
                     if let Some(set_pending) = pending_messages {
                         set_pending.update(|msgs| msgs.push(pending_msg));
                     }
-
+    
                     // 4. First create a stream
                     let window = web_sys::window().unwrap();
                     let resp_value = match JsFuture::from(window.fetch_with_str("/api/create-stream")).await {
@@ -1038,7 +1022,7 @@ pub fn Chat(
                             return;
                         }
                     };
-
+    
                     let resp = resp_value.dyn_into::<web_sys::Response>().unwrap();
                     let json = match JsFuture::from(resp.json().unwrap()).await {
                         Ok(json) => json,
@@ -1055,7 +1039,7 @@ pub fn Chat(
                             return;
                         }
                     };
-
+    
                     let stream_data: StreamResponse = match serde_wasm_bindgen::from_value(json) {
                         Ok(data) => data,
                         Err(e) => {
@@ -1071,17 +1055,18 @@ pub fn Chat(
                             return;
                         }
                     };
-
+    
                     let stream_id = stream_data.stream_id;
                     set_current_stream_id(Some(stream_id.clone()));
-
+    
                     // 5. Set up SSE stream to collect content using the stream_id
                     let mut accumulated_content = String::new();
+                    let mut current_citations: Vec<DocumentCitation> = Vec::new();
                     
                     let thread_id_value = thread_id.get_untracked().to_string();
                     let active_model_value = model.get_untracked().to_string();
                     let active_lab_value = lab.get_untracked().to_string();
-
+    
                     let url = format!(
                         "/api/send_message_stream?stream_id={}&thread_id={}&model={}&lab={}",
                         urlencoding::encode(&stream_id),
@@ -1089,21 +1074,22 @@ pub fn Chat(
                         urlencoding::encode(&active_model_value),
                         urlencoding::encode(&active_lab_value)
                     );
-
+    
                     let event_source = EventSource::new(&url)
                         .expect("Failed to connect to SSE endpoint");
                     
                     let event_source_clone = event_source.clone();
-        			let on_message = {
+                    let on_message = {
                         let on_message_created_clone = on_message_created;
                         let pending_id_clone = pending_id.clone();
-        				Closure::wrap(Box::new(move |event: MessageEvent| {
-        					if let Some(data) = event.data().as_string() {
+                        Closure::wrap(Box::new(move |event: MessageEvent| {
+                            if let Some(data) = event.data().as_string() {
+                                // Handle simple text responses (non-RAG)
                                 if data == "[DONE]" {
                                     event_source_clone.close();
                                     set_is_sending(false);
                                     set_current_stream_id(None);
-
+    
                                     // 6. Save final content to DB and remove from pending
                                     let final_content = accumulated_content.clone();
                                     let is_llm = true;
@@ -1115,7 +1101,7 @@ pub fn Chat(
                                         active_lab: lab.get_untracked().clone(),
                                         user_id,
                                     };
-
+    
                                     spawn_local(async move {
                                         if let Err(e) = create_message(assistant_message_view, is_llm).await {
                                             error!("Failed to create LLM message: {e:?}");
@@ -1124,13 +1110,14 @@ pub fn Chat(
                                             callback.run(());
                                         }
                                     });
-
+    
                                     // Remove from pending messages
                                     if let Some(set_pending) = pending_messages {
                                         set_pending.update(|msgs| {
                                             msgs.retain(|m| m.id != pending_id_clone)
                                         });
                                     }
+                                    return;
                                 } else if data == "[CANCELLED]" {
                                     event_source_clone.close();
                                     set_is_sending(false);
@@ -1142,27 +1129,141 @@ pub fn Chat(
                                             msgs.retain(|m| m.id != pending_id_clone)
                                         });
                                     }
-                                } else {
-                                    // 7. Stream tokens into pending message
-                                    accumulated_content.push_str(&data);
-                                    
-                                    // Update pending message content
-                                    if let Some(set_pending) = pending_messages {
-                                        set_pending.update(|msgs| {
-                                            if let Some(msg) = msgs.iter_mut().find(|m| m.id == pending_id_clone) {
-                                                msg.content = accumulated_content.clone();
+                                    return;
+                                }
+    
+                                // Try to parse as RAG response first
+                                match serde_json::from_str::<RagResponse>(&data) {
+                                    Ok(rag_response) => {
+                                        match rag_response.message_type.as_str() {
+                                            "status" => {
+                                                // Update pending message with status
+                                                if let Some(status) = rag_response.status {
+                                                    if let Some(set_pending) = pending_messages {
+                                                        set_pending.update(|msgs| {
+                                                            if let Some(msg) = msgs.iter_mut().find(|m| m.id == pending_id_clone) {
+                                                                msg.content = format!("🔍 {}", status);
+                                                            }
+                                                        });
+                                                    }
+                                                }
                                             }
-                                        });
+                                            "citations" => {
+                                                if let Some(citations) = rag_response.citations {
+                                                    current_citations = citations;
+                                                    // Optionally update the pending message to show citations received
+                                                    if let Some(set_pending) = pending_messages {
+                                                        set_pending.update(|msgs| {
+                                                            if let Some(msg) = msgs.iter_mut().find(|m| m.id == pending_id_clone) {
+                                                                msg.content = format!("📄 Found {} relevant documents...", current_citations.len());
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                            "content" => {
+                                                if let Some(content) = rag_response.content {
+                                                    accumulated_content.push_str(&content);
+                                                    
+                                                    // Update pending message content
+                                                    if let Some(set_pending) = pending_messages {
+                                                        set_pending.update(|msgs| {
+                                                            if let Some(msg) = msgs.iter_mut().find(|m| m.id == pending_id_clone) {
+                                                                msg.content = accumulated_content.clone();
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                            "error" => {
+                                                if let Some(error_content) = rag_response.content {
+                                                    error!("RAG Error: {}", error_content);
+                                                    
+                                                    // Update pending message with error
+                                                    if let Some(set_pending) = pending_messages {
+                                                        set_pending.update(|msgs| {
+                                                            if let Some(msg) = msgs.iter_mut().find(|m| m.id == pending_id_clone) {
+                                                                msg.content = format!("❌ Error: {}", error_content);
+                                                                msg.is_streaming = false;
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                                
+                                                event_source_clone.close();
+                                                set_is_sending(false);
+                                                set_current_stream_id(None);
+                                            }
+                                            "done" => {
+                                                event_source_clone.close();
+                                                set_is_sending(false);
+                                                set_current_stream_id(None);
+    
+                                                // Create final content with citations if available
+                                                let mut final_content = accumulated_content.clone();
+                                                if !current_citations.is_empty() {
+                                                    final_content.push_str("\n\n**Sources:**\n");
+                                                    for citation in &current_citations {
+                                                        final_content.push_str(&format!(
+                                                            "- **{}** (similarity: {:.2})\n",
+                                                            citation.filename,
+                                                            citation.similarity
+                                                        ));
+                                                    }
+                                                }
+    
+                                                // Save final content to DB and remove from pending
+                                                let is_llm = true;
+                                                let assistant_message_view = NewMessageView {
+                                                    thread_id: thread_id.get_untracked().clone(),
+                                                    content: Some(final_content),
+                                                    role: "assistant".to_string(),
+                                                    active_model: model.get_untracked().clone(),
+                                                    active_lab: lab.get_untracked().clone(),
+                                                    user_id,
+                                                };
+    
+                                                spawn_local(async move {
+                                                    if let Err(e) = create_message(assistant_message_view, is_llm).await {
+                                                        error!("Failed to create LLM message: {e:?}");
+                                                    } 
+                                                    if let Some(callback) = on_message_created_clone {
+                                                        callback.run(());
+                                                    }
+                                                });
+    
+                                                // Remove from pending messages
+                                                if let Some(set_pending) = pending_messages {
+                                                    set_pending.update(|msgs| {
+                                                        msgs.retain(|m| m.id != pending_id_clone)
+                                                    });
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    Err(_) => {
+                                        // Not a RAG response, handle as regular streaming text
+                                        accumulated_content.push_str(&data);
+                                        
+                                        // Update pending message content
+                                        if let Some(set_pending) = pending_messages {
+                                            set_pending.update(|msgs| {
+                                                if let Some(msg) = msgs.iter_mut().find(|m| m.id == pending_id_clone) {
+                                                    msg.content = accumulated_content.clone();
+                                                }
+                                            });
+                                        }
                                     }
                                 }
                             }
-        				}) as Box<dyn FnMut(_)>)
-        			};
-
+                        }) as Box<dyn FnMut(_)>)
+                    };
+    
                     let event_source_error = event_source.clone();
-        			let on_error = {
+                    let on_error = {
                         let pending_id_clone = pending_id.clone();
-        				Closure::wrap(Box::new(move |error: ErrorEvent| {
+                        Closure::wrap(Box::new(move |error: ErrorEvent| {
                             error!("SSE Error: {error:?}");
                             if let Some(es) = error.target()
                                 .and_then(|t| t.dyn_into::<web_sys::EventSource>().ok())
@@ -1182,13 +1283,13 @@ pub fn Chat(
                                     msgs.retain(|m| m.id != pending_id_clone)
                                 });
                             }
-        				}) as Box<dyn FnMut(_)>)
-        			};
-        
-        			event_source.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-        			event_source.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-        			on_message.forget();
-        			on_error.forget();
+                        }) as Box<dyn FnMut(_)>)
+                    };
+    
+                    event_source.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+                    event_source.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+                    on_message.forget();
+                    on_error.forget();
                 }
                 Err(e) => {
                     error!("Failed to create message: {e:?}");
@@ -1198,7 +1299,7 @@ pub fn Chat(
                     } else {
                         show_toast("Failed to send message. Please try again.".to_string());
                     }
-
+    
                     set_is_sending(false);
                 }
             }
@@ -1289,10 +1390,10 @@ pub fn Chat(
                         class:focus:ring-seafoam-500=move || !is_sending.get()
                         class:dark:bg-teal-600=move || !is_sending.get()
                         class:dark:hover:bg-teal-700=move || !is_sending.get()
-                        class:bg-red-500=move || is_sending.get()
-                        class:hover:bg-red-600=move || is_sending.get()
-                        class:dark:bg-red-600=move || is_sending.get()
-                        class:dark:hover:bg-red-700=move || is_sending.get()
+                        class:bg-seafoam-400=move || is_sending.get()
+                        class:hover:bg-salmon-600=move || is_sending.get()
+                        class:dark:bg-salmon-600=move || is_sending.get()
+                        class:dark:hover:bg-salmon-700=move || is_sending.get()
                         on:click=send_message_action
                         disabled=move || (!is_sending.get() && message.get().trim().is_empty())
                     >
