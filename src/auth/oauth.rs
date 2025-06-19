@@ -371,7 +371,7 @@ pub mod oauth_server {
         debug!("Setting auth cookie and redirecting to admin panel");
         let cookie = Cookie::build(("auth_token", jwt_token))
             .path("/")
-            .secure(false) // Set to false for localhost
+            .secure(true)
             .http_only(true)
             .same_site(SameSite::Lax)
             .build();
