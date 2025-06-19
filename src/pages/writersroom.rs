@@ -114,8 +114,21 @@ pub fn WritersRoom() -> impl IntoView {
         set_thread_id.set(new_id);
         set_message_refetch_trigger.update(|n| *n += 1);
         set_pending_messages.update(|msgs| msgs.clear());
-        // Close panels on mobile after selecting thread
-        set_show_threads.set(false);
+        
+        // Only close panels on mobile if we're not in search mode
+        if search_term.get().is_empty() {
+            if cfg!(feature = "hydrate") {
+                let is_mobile = web_sys::window()
+                    .and_then(|w| w.inner_width().ok())
+                    .and_then(|w| w.as_f64())
+                    .map(|w| w < 768.0)
+                    .unwrap_or(false);
+                
+                if is_mobile {
+                    set_show_threads.set(false);
+                }
+            }
+        }
     });
 
     Effect::new(move |_| {
@@ -357,7 +370,7 @@ pub fn WritersRoom() -> impl IntoView {
                         }
                     }
                 }>
-                    <div class="p-4 h-full overflow-y-auto w-80">
+                    <div class="p-4 h-full overflow-y-auto w-80 dark:border-teal-700 bg-gray-300 dark:bg-teal-900">
                         <ThreadList
                             current_thread_id=thread_id
                             set_current_thread_id=thread_switch_callback
@@ -372,23 +385,43 @@ pub fn WritersRoom() -> impl IntoView {
                 // Main chat area
                 <div class="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
                     <div class="flex-1 overflow-hidden p-2 md:p-4 min-w-0">
-                        <MessageList
-                            current_thread_id=thread_id
-                            set_current_thread_id=set_thread_id
-                            refetch_trigger=message_refetch_trigger
-                            pending_messages=pending_messages
-                            search_term=search_term
-                            search_action=search_action
-                        />
+                        <div class=move || {
+                            let base_class = "h-full max-w-none mx-auto";
+                            if show_threads.get() {
+                                format!("{base_class} px-0")
+                            } else {
+                                format!("{base_class} px-0 md:px-56")
+                            }
+                        }>
+                            <MessageList
+                                current_thread_id=thread_id
+                                set_current_thread_id=set_thread_id
+                                refetch_trigger=message_refetch_trigger
+                                pending_messages=pending_messages
+                                search_term=search_term
+                                search_action=search_action
+                            />
+                        </div>
                     </div>
 
-                    <div class="flex-shrink-0 border-t border-gray-400 dark:border-teal-700 bg-gray-100 dark:bg-teal-800 p-2 md:p-4">
-                        <Chat
-                            thread_id=thread_id
-                            on_message_created=on_message_created
-                            pending_messages=set_pending_messages
-                            on_thread_created=on_thread_created
-                        />
+                    <div class="flex-shrink-0 border-t border-gray-400 dark:border-teal-700 bg-gray-300 dark:bg-teal-900 p-2 md:p-4">
+                        <div class=move || {
+                            let base_class = "max-w-none mx-auto";
+                            if show_threads.get() {
+                                format!("{base_class} px-0")
+                            } else {
+                                format!("{base_class} px-0 md:px-56")
+                            }
+                        }>
+                            <div class="rounded-lg overflow-hidden">
+                                <Chat
+                                    thread_id=thread_id
+                                    on_message_created=on_message_created
+                                    pending_messages=set_pending_messages
+                                    on_thread_created=on_thread_created
+                                />
+                            </div>
+                        </div>
                     </div>
                 </div>
 

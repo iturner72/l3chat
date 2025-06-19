@@ -1343,7 +1343,7 @@ pub fn Chat(
 
     view! {
         <div class="relative">
-            <div class="flex flex-col space-y-3 pl-3 pr-3 bg-white dark:bg-teal-800 border-gray-300 dark:border-teal-600">
+            <div class="flex flex-col space-y-3 pl-3 pr-3 bg-gray-300 dark:bg-teal-900 border-gray-300 dark:border-teal-600">
                 <div class="flex space-x-3">
                     <textarea
                         class="flex-1 pt-3 pl-3 rounded-lg resize-none min-h-[2.5rem] max-h-32

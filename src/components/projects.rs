@@ -150,7 +150,7 @@ pub fn ProjectsList(
 
                                                             full_width=true
                                                             class=format!(
-                                                                "text-left p-4 group transition-all duration-200 {}",
+                                                                "text-left p-4 group transition-all duration-0 {}",
                                                                 if is_selected() {
                                                                     "ring-2 ring-mint-400 dark:ring-mint-500 bg-mint-50 dark:bg-mint-900"
                                                                 } else {
@@ -241,22 +241,13 @@ pub fn ProjectsList(
                         }
                         Some(Err(e)) => {
                             view! {
-                                // Toggle project selection
-
                                 <div class="text-center error-themed py-8">
                                     <p>"Error loading projects: " {e}</p>
                                 </div>
                             }
                                 .into_any()
                         }
-                        None => {
-                            view! {
-                                // Toggle project selection
-
-                                <div></div>
-                            }
-                                .into_any()
-                        }
+                        None => view! { <div></div> }.into_any(),
                     }
                 }}
 
@@ -409,7 +400,7 @@ fn ProjectDetails(project_id: Uuid) -> impl IntoView {
                 </div>
             </div>
 
-            <Suspense fallback=|| {
+            <Transition fallback=|| {
                 view! { <div class="loading-themed">"Loading documents..."</div> }.into_any()
             }>
                 {move || {
@@ -463,7 +454,7 @@ fn ProjectDetails(project_id: Uuid) -> impl IntoView {
                     }
                 }}
 
-            </Suspense>
+            </Transition>
 
             {move || {
                 if show_upload.get() {
