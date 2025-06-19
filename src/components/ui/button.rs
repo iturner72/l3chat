@@ -58,7 +58,7 @@ impl ButtonVariant {
                  border border-salmon-500 dark:border-salmon-600"
             }
             ButtonVariant::Success => {
-                "bg-seafoam-400 dark:bg-seafoam-500 text-white \
+                "bg-seafoam-400 dark:bg-seafoam-500 text-gray-600 dark-text-gray-400 \
                  hover:bg-seafoam-600 dark:hover:bg-seafoam-700 \
                  focus:ring-2 focus:ring-seafoam-500 dark:focus:ring-seafoam-600 \
                  active:bg-seafoam-700 dark:active:bg-seafoam-800 \

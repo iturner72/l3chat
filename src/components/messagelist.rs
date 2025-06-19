@@ -572,38 +572,43 @@ pub fn MessageList(
                                                         {move || {
                                                             if let DisplayMessage::Persisted(msg) = &message {
                                                                 let db_id = msg.id;
-                                                                view! {
-                                                                    <div class="opacity-0 group-hover:opacity-100 transition-opacity duration-0">
-                                                                        <Button
-                                                                            variant=ButtonVariant::Ghost
-                                                                            size=ButtonSize::Small
-                                                                            disabled=create_branch_action.pending().get()
-                                                                            on_click=Callback::new(move |_| {
-                                                                                create_branch_action.dispatch((db_id,));
-                                                                            })
+                                                                let is_user_message = msg.role == "user";
+                                                                if is_user_message {
+                                                                    view! {
+                                                                        <div class="opacity-0 group-hover:opacity-100 transition-opacity duration-0">
+                                                                            <Button
+                                                                                variant=ButtonVariant::Ghost
+                                                                                size=ButtonSize::Small
+                                                                                disabled=create_branch_action.pending().get()
+                                                                                on_click=Callback::new(move |_| {
+                                                                                    create_branch_action.dispatch((db_id,));
+                                                                                })
 
-                                                                            class="text-xs"
-                                                                        >
-                                                                            <div class="inline-flex items-center gap-1">
-                                                                                <div class="rotate-180-mirror text-teal-700 dark:text-teal-100">
-                                                                                    <Icon
-                                                                                        icon=icondata_mdi::MdiSourceBranchPlus
-                                                                                        width="14"
-                                                                                        height="14"
-                                                                                        style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
-                                                                                    />
+                                                                                class="text-xs"
+                                                                            >
+                                                                                <div class="inline-flex items-center gap-1">
+                                                                                    <div class="rotate-180-mirror text-teal-700 dark:text-teal-100">
+                                                                                        <Icon
+                                                                                            icon=icondata_mdi::MdiSourceBranchPlus
+                                                                                            width="14"
+                                                                                            height="14"
+                                                                                            style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
+                                                                                        />
+                                                                                    </div>
+                                                                                    {if create_branch_action.pending().get() {
+                                                                                        "creating..."
+                                                                                    } else {
+                                                                                        "branch"
+                                                                                    }}
+
                                                                                 </div>
-                                                                                {if create_branch_action.pending().get() {
-                                                                                    "creating..."
-                                                                                } else {
-                                                                                    "branch"
-                                                                                }}
-
-                                                                            </div>
-                                                                        </Button>
-                                                                    </div>
+                                                                            </Button>
+                                                                        </div>
+                                                                    }
+                                                                        .into_any()
+                                                                } else {
+                                                                    view! { <div></div> }.into_any()
                                                                 }
-                                                                    .into_any()
                                                             } else {
                                                                 view! { <div></div> }.into_any()
                                                             }
@@ -806,8 +811,8 @@ pub async fn create_branch(
 
     let result = conn.transaction(|conn| {
         Box::pin(async move {
-            // Verify source thread exists and user owns it
-            let _source_thread = threads::table
+            // Verify source thread exists and user owns it, AND get the project_id
+            let source_thread = threads::table
                 .find(&source_thread_id_clone)
                 .filter(threads::user_id.eq(user_id))
                 .first::<Thread>(conn)
@@ -842,17 +847,17 @@ pub async fn create_branch(
                 Vec::new()
             };
     
-            // Get ALL branch names for this user to find the highest number used
-            let all_branch_names: Vec<Option<String>> = threads::table
+            // Get branch names for THIS specific thread only
+            let branch_names: Vec<Option<String>> = threads::table
                 .filter(threads::user_id.eq(user_id))
-                .filter(threads::parent_thread_id.is_not_null()) // Only branches
+                .filter(threads::parent_thread_id.eq(&source_thread_id_clone)) // Only branches of THIS thread
                 .select(threads::branch_name)
                 .load(conn)
                 .await?;
-    
-            // Find the highest existing branch number across all user's branches
+            
+            // Find the highest existing branch number for this thread
             let mut highest_branch_number = 0;
-            for branch_name_opt in all_branch_names {
+            for branch_name_opt in branch_names {
                 if let Some(branch_name) = branch_name_opt {
                     if let Ok(num) = branch_name.parse::<i32>() {
                         if num > highest_branch_number {
@@ -861,8 +866,8 @@ pub async fn create_branch(
                     }
                 }
             }
-    
-            // Generate next sequential branch name
+            
+            // Generate next sequential branch name for this thread
             let branch_name = format!("{}", highest_branch_number + 1);
     
             // Create new thread
@@ -875,7 +880,7 @@ pub async fn create_branch(
                 branch_point_message_id: Some(branch_point_message_id),
                 branch_name: Some(branch_name),
                 title: None,
-                project_id: None,
+                project_id: source_thread.project_id,
             };
     
             diesel::insert_into(threads::table)

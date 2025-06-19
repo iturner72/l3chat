@@ -15,8 +15,9 @@ use crate::server_fn::projects::{get_user_projects, create_project_thread};
 
 async fn create_project_thread_query(project_id: Uuid) -> Result<String, String> {
     create_project_thread(project_id).await.map_err(|e| e.to_string())
+}
 
-}async fn create_thread_query() -> Result<String, String> {
+async fn create_thread_query() -> Result<String, String> {
     create_thread().await.map_err(|e| e.to_string())
 }
 
@@ -40,7 +41,9 @@ pub fn WritersRoom() -> impl IntoView {
     let (search_term, set_search_term) = signal(String::new());
     let (search_action, set_search_action) = signal(false);
     let (pending_messages, set_pending_messages) = signal(Vec::<PendingMessage>::new());
-    let (selected_project, _set_selected_project) = signal(None::<Uuid>);
+    
+    // Project selection state - this is the key addition
+    let (selected_project, set_selected_project) = signal(None::<Uuid>);
     let (_available_projects, set_available_projects) = signal(Vec::<ProjectView>::new());
 
     let thread_context = ThreadContext {
@@ -264,6 +267,9 @@ pub fn WritersRoom() -> impl IntoView {
                             set_current_thread_id=thread_switch_callback
                             set_search_term=set_search_term
                             set_search_action=set_search_action
+                            // Pass project selection state to ThreadList
+                            selected_project=selected_project
+                            set_selected_project=set_selected_project
                         />
                     </div>
                 </div>
@@ -299,7 +305,11 @@ pub fn WritersRoom() -> impl IntoView {
                     }
                 }>
                     <div class="p-4 h-full overflow-y-auto w-auto">
-                        <ProjectsPage/>
+                        <ProjectsPage
+                            // Pass project selection state to ProjectsPage
+                            selected_project=selected_project
+                            set_selected_project=set_selected_project
+                        />
                     </div>
                 </div>
             </div>
@@ -310,7 +320,7 @@ pub fn WritersRoom() -> impl IntoView {
                 on_close=move || set_toast_visible(false)
             />
         </div>
-    }.into_any()
+    }
 }
 
 #[server(CreateThread, "/api")]

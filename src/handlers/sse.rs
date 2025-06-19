@@ -11,7 +11,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 use futures::stream::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use log::{debug, info};
+use log::debug;
 
 use crate::{
     cancellable_sse::{create_cancellable_sse_stream, CancellableSseStream},
@@ -39,12 +39,12 @@ pub async fn create_stream(
     let user_id = claims.user_id()
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
-    info!("Creating SSE stream for user: {user_id}");
+    debug!("Creating SSE stream for user: {user_id}");
     
     let stream_id = uuid::Uuid::new_v4().to_string();
     state.sse_state.register_stream(stream_id.clone());
     
-    info!("Created SSE stream: {stream_id} for user: {user_id}");
+    debug!("Created SSE stream: {stream_id} for user: {user_id}");
     
     Ok(Json(StreamResponse { stream_id }))
 }

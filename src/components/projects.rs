@@ -16,9 +16,12 @@ pub async fn get_user_projects_query() -> Result<Vec<ProjectView>, String> {
 }
 
 #[component]
-pub fn ProjectsPage() -> impl IntoView {
+pub fn ProjectsPage(
+    // Accept project selection state from parent
+    selected_project: ReadSignal<Option<Uuid>>,
+    set_selected_project: WriteSignal<Option<Uuid>>,
+) -> impl IntoView {
     let client: QueryClient = expect_context();
-    let (selected_project, set_selected_project) = signal(None::<Uuid>);
     let (show_create_form, set_show_create_form) = signal(false);
 
     let projects_resource = client.resource(
@@ -140,38 +143,90 @@ pub fn ProjectsList(
                                                     <div class="flex flex-row items-center justify-between space-x-2">
                                                         <Button
                                                             variant=if is_selected() {
-                                                                ButtonVariant::Primary
+                                                                ButtonVariant::Success
                                                             } else {
                                                                 ButtonVariant::Outline
                                                             }
 
                                                             full_width=true
-                                                            class="text-left p-4 group"
+                                                            class=format!(
+                                                                "text-left p-4 group transition-all duration-200 {}",
+                                                                if is_selected() {
+                                                                    "ring-2 ring-mint-400 dark:ring-mint-500 bg-mint-50 dark:bg-mint-900"
+                                                                } else {
+                                                                    ""
+                                                                },
+                                                            )
+
                                                             on_click=Callback::new(move |_| {
-                                                                set_selected_project.set(Some(project_id))
+                                                                if selected_project.get() == Some(project_id) {
+                                                                    set_selected_project.set(None);
+                                                                } else {
+                                                                    set_selected_project.set(Some(project_id));
+                                                                }
                                                             })
                                                         >
 
                                                             <div class="flex flex-row items-center justify-between gap-2 w-full">
-                                                                <div class="flex-1 min-w-0">
-                                                                    <h3 class="font-medium">{project_name.clone()}</h3>
-                                                                    {project_description
-                                                                        .as_ref()
-                                                                        .map(|desc| {
-                                                                            view! {
-                                                                                <p class="text-sm opacity-75 mt-1 truncate">
-                                                                                    {desc.clone()}
-                                                                                </p>
+                                                                <div class="flex items-center gap-3">
+                                                                    <div class="flex-shrink-0">
+                                                                        {move || {
+                                                                            if is_selected() {
+                                                                                view! {
+                                                                                    <Icon
+                                                                                        icon=icondata_bs::BsFolder2Open
+                                                                                        width="20"
+                                                                                        height="20"
+                                                                                    />
+                                                                                }
+                                                                                    .into_any()
+                                                                            } else {
+                                                                                view! {
+                                                                                    <Icon icon=icondata_bs::BsFolder2 width="20" height="20"/>
+                                                                                }
+                                                                                    .into_any()
                                                                             }
-                                                                                .into_any()
-                                                                        })}
+                                                                        }}
 
+                                                                    </div>
+                                                                    <div class="flex-1 min-w-0">
+                                                                        <h3 class="font-medium">{project_name.clone()}</h3>
+                                                                        {project_description
+                                                                            .as_ref()
+                                                                            .map(|desc| {
+                                                                                view! {
+                                                                                    <p class="text-sm opacity-75 mt-1 truncate">
+                                                                                        {desc.clone()}
+                                                                                    </p>
+                                                                                }
+                                                                                    .into_any()
+                                                                            })}
+
+                                                                    </div>
                                                                 </div>
+                                                                {move || {
+                                                                    if is_selected() {
+                                                                        view! {
+                                                                            <div class="flex-shrink-0 text-success-600 dark:text-success-400">
+                                                                                <Icon
+                                                                                    icon=icondata_bs::BsCheck2Circle
+                                                                                    width="16"
+                                                                                    height="16"
+                                                                                />
+                                                                            </div>
+                                                                        }
+                                                                            .into_any()
+                                                                    } else {
+                                                                        view! { <div></div> }.into_any()
+                                                                    }
+                                                                }}
+
                                                             </div>
                                                         </Button>
                                                         <DeleteProjectButton
                                                             project_id=project_id
                                                             project_name=project.name.clone()
+                                                            set_selected_project=set_selected_project
                                                         />
                                                     </div>
                                                 }
@@ -186,13 +241,22 @@ pub fn ProjectsList(
                         }
                         Some(Err(e)) => {
                             view! {
+                                // Toggle project selection
+
                                 <div class="text-center error-themed py-8">
                                     <p>"Error loading projects: " {e}</p>
                                 </div>
                             }
                                 .into_any()
                         }
-                        None => view! { <div></div> }.into_any(),
+                        None => {
+                            view! {
+                                // Toggle project selection
+
+                                <div></div>
+                            }
+                                .into_any()
+                        }
                     }
                 }}
 
@@ -205,6 +269,7 @@ pub fn ProjectsList(
 pub fn DeleteProjectButton(
     project_id: Uuid,
     project_name: String,
+    set_selected_project: WriteSignal<Option<Uuid>>,
 ) -> impl IntoView {
     let client: QueryClient = expect_context();
     let (show_confirm, set_show_confirm) = signal(false);
@@ -213,6 +278,13 @@ pub fn DeleteProjectButton(
         async move {
             match delete_project(project_id).await {
                 Ok(_) => {
+                    // Clear selection if this project was selected
+                    set_selected_project.update(|selected| {
+                        if *selected == Some(project_id) {
+                            *selected = None;
+                        }
+                    });
+                    
                     client.invalidate_query(get_user_projects_query, ());
                     client.invalidate_query(get_threads_query, ());
                     Ok(())
@@ -423,7 +495,6 @@ pub fn StartChatButton(project_id: Uuid) -> impl IntoView {
         async move {
             match create_project_thread(project_id).await {
                 Ok(thread_id) => {
-
                     client.invalidate_query(get_threads_query, ());
 
                     if let Some(thread_context) = use_context::<ThreadContext>() {

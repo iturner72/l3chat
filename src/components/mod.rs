@@ -5,7 +5,6 @@ pub mod footer;
 pub mod markdown;
 pub mod messagelist;
 pub mod projects;
-pub mod search;
 pub mod threadlist;
 pub mod toast;
 pub mod ui;
