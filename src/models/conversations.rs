@@ -141,7 +141,10 @@ cfg_if! { if #[cfg(feature = "ssr")] {
     use chrono::NaiveDateTime;
     use diesel::prelude::*;
 
-    #[derive(Debug, Serialize, Deserialize, Queryable, QueryableByName,  Identifiable, Insertable)]
+    use crate::models::projects::Project;
+
+    #[derive(Debug, Serialize, Deserialize, Queryable, QueryableByName,  Identifiable, Insertable, Associations)]
+    #[diesel(belongs_to(Project, foreign_key = project_id))]
     #[diesel(table_name = threads)]
     pub struct Thread {
         #[diesel(column_name = id)]

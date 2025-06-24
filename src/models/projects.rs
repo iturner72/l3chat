@@ -73,11 +73,13 @@ pub struct NewDocumentView {
 
 cfg_if! { if #[cfg(feature = "ssr")] {
     use crate::schema::*;
+    use crate::models::users::User;
     use chrono::NaiveDateTime;
     use diesel::prelude::*;
     use pgvector::Vector;
 
-    #[derive(Debug, Serialize, Deserialize, Queryable, Identifiable, Insertable)]
+    #[derive(Debug, Serialize, Deserialize, Queryable, Identifiable, Insertable, Associations)]
+    #[diesel(belongs_to(User, foreign_key = user_id))]
     #[diesel(table_name = projects)]
     pub struct Project {
         pub id: Uuid,
@@ -89,7 +91,8 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub updated_at: Option<NaiveDateTime>,
     }
 
-    #[derive(Debug, Insertable)]
+    #[derive(Debug, Insertable, Associations)]
+    #[diesel(belongs_to(User, foreign_key = user_id))]
     #[diesel(table_name = projects)]
     pub struct NewProject {
         pub user_id: i32,
@@ -98,7 +101,8 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub instructions: Option<String>,
     }
 
-    #[derive(Debug, Serialize, Deserialize, Queryable, Identifiable, Insertable)]
+    #[derive(Debug, Serialize, Deserialize, Queryable, Identifiable, Insertable, Associations)]
+    #[diesel(belongs_to(Project, foreign_key = project_id))]
     #[diesel(table_name = project_documents)]
     pub struct ProjectDocument {
         pub id: Uuid,
@@ -111,7 +115,8 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub updated_at: Option<NaiveDateTime>,
     }
 
-    #[derive(Debug, Insertable)]
+    #[derive(Debug, Insertable, Associations)]
+    #[diesel(belongs_to(Project, foreign_key = project_id))]
     #[diesel(table_name = project_documents)]
     pub struct NewProjectDocument {
         pub project_id: Uuid,
@@ -121,7 +126,9 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub file_size: Option<i32>,
     }
 
-    #[derive(Debug, Serialize, Deserialize, Queryable, Identifiable, Insertable)]
+    #[derive(Debug, Serialize, Deserialize, Queryable, Identifiable, Insertable, Associations)]
+    #[diesel(belongs_to(ProjectDocument, foreign_key = document_id))]
+    #[diesel(table_name = document_chunks)]
     pub struct DocumentChunk {
         pub id: Uuid,
         pub document_id: Uuid,
@@ -133,7 +140,8 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub created_at: Option<NaiveDateTime>,
     }
 
-    #[derive(Debug, Insertable)]
+    #[derive(Debug, Insertable, Associations)]
+    #[diesel(belongs_to(ProjectDocument, foreign_key = document_id))]
     #[diesel(table_name = document_chunks)]
     pub struct NewDocumentChunk {
         pub document_id: Uuid,
@@ -144,7 +152,8 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub metadata: Option<serde_json::Value>,
     }
 
-    #[derive(Debug, Serialize, Deserialize, Queryable, Identifiable, Insertable)]
+    #[derive(Debug, Serialize, Deserialize, Queryable, Identifiable, Insertable, Associations)]
+    #[diesel(belongs_to(DocumentChunk, foreign_key = chunk_id))]
     #[diesel(table_name = chunk_embeddings, primary_key(chunk_id))]
     pub struct ChunkEmbedding {
         pub chunk_id: Uuid,
@@ -153,7 +162,8 @@ cfg_if! { if #[cfg(feature = "ssr")] {
         pub created_at: Option<NaiveDateTime>,
     }
 
-    #[derive(Debug, Insertable)]
+    #[derive(Debug, Insertable, Associations)]
+    #[diesel(belongs_to(DocumentChunk, foreign_key = chunk_id))]
     #[diesel(table_name = chunk_embeddings)]
     pub struct NewChunkEmbedding {
         pub chunk_id: Uuid,

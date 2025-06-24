@@ -17,10 +17,16 @@ pub mod projects_service {
         openai: OpenAIClient<async_openai::config::OpenAIConfig>,
     }
 
-    impl ProjectsService {
-        pub fn new() -> Self {
+    impl Default for ProjectsService {
+        fn default() -> Self {
             let openai = OpenAIClient::new();
             Self { openai }
+        }
+    }
+
+    impl ProjectsService {
+        pub fn new() -> Self {
+            Default::default()
         }
 
         pub fn chunk_text(&self, text: &str, chunk_size: usize, overlap: usize) -> Vec<(String, usize, usize)> {
@@ -133,8 +139,8 @@ pub mod projects_service {
             let query_embedding = self.generate_embedding(query).await?;
 
             let results = document_chunks::table
-                .inner_join(chunk_embeddings::table.on(document_chunks::id.eq(chunk_embeddings::chunk_id)))
-                .inner_join(project_documents::table.on(document_chunks::document_id.eq(project_documents::id)))
+                .inner_join(chunk_embeddings::table)
+                .inner_join(project_documents::table)
                 .filter(project_documents::project_id.eq(project_id))
                 .filter(chunk_embeddings::embedding.is_not_null())
                 .select((
@@ -167,45 +173,6 @@ pub mod projects_service {
                 .collect();
 
             Ok(search_results)
-        }
-    
-        pub async fn get_project_context(
-            &self,
-            pool: &DbPool,
-            project_id: Uuid,
-            query: &str,
-        ) -> Result<String, Box<dyn std::error::Error + Send + Sync >> {
-            let mut conn = pool.get().await?;
-    
-            let project: Project = projects::table
-                .find(project_id)
-                .first(&mut conn)
-                .await?;
-    
-            let search_results = self.search_project(pool, project_id, query, 5).await?;
-
-            log::info!("found results: {search_results:?}");
-    
-            let mut context = String::new();
-    
-            if let Some(instructions) = &project.instructions {
-                context.push_str("PROJECT INSTRUCTIONS:\n");
-                context.push_str(instructions);
-                context.push_str("\n\n");
-            }
-    
-            if !search_results.is_empty() {
-                context.push_str("RELEVANT CONTEXT:\n");
-                for result in search_results {
-                    context.push_str(&format!(
-                        "From {}: {}\n\n",
-                        result.filename,
-                        result.chunk_text
-                    ));
-                }
-            }
-    
-            Ok(context)
         }
     }
 }

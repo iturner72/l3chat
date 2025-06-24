@@ -1,590 +1,4 @@
-#[component]
-fn UserInfo() -> impl IntoView {
-    let auth = use_context::<AuthContext>().expect("AuthContext not found");
-    let current_user = Resource::new(|| (), |_| get_current_user());
-
-    view! {
-        <div class="border-t border-themed pt-3 mt-3 p-4">
-            <Transition fallback=|| {
-                view! {
-                    <div class="flex items-center space-x-3 p-3 card-themed animate-pulse">
-                        <div class="w-10 h-10 bg-surface-secondary rounded-full"></div>
-                        <div class="flex-1 space-y-1">
-                            <div class="h-4 bg-surface-secondary rounded"></div>
-                            <div class="h-3 bg-surface-secondary rounded w-3/4"></div>
-                        </div>
-                    </div>
-                }
-            }>
-                {move || {
-                    if auth.is_loading.get() {
-                        view! {
-                            <div class="flex items-center space-x-3 p-3 card-themed animate-pulse">
-                                <div class="w-10 h-10 bg-surface-secondary rounded-full"></div>
-                                <div class="flex-1">
-                                    <div class="text-sm text-themed-secondary">"Loading..."</div>
-                                </div>
-                            </div>
-                        }
-                            .into_any()
-                    } else if auth.is_authenticated.get() {
-                        current_user
-                            .get()
-                            .map(|user_result| {
-                                match user_result {
-                                    Ok(Some(user)) => {
-                                        view! {
-                                            <a
-                                                href="/admin-panel"
-                                                class="flex items-center space-x-3 p-3 card-themed card-hover cursor-pointer group"
-                                            >
-                                                {user
-                                                    .avatar_url
-                                                    .as_ref()
-                                                    .map(|avatar| {
-                                                        view! {
-                                                            <img
-                                                                src=avatar.clone()
-                                                                alt="User avatar"
-                                                                class="w-10 h-10 rounded-full border-2 border-themed"
-                                                            />
-                                                        }
-                                                            .into_any()
-                                                    })
-                                                    .unwrap_or_else(|| {
-                                                        view! {
-                                                            <div class="w-10 h-10 bg-primary-600 rounded-full flex items-center justify-center text-white text-lg">
-                                                                {user
-                                                                    .display_name
-                                                                    .clone()
-                                                                    .or(user.username.clone())
-                                                                    .unwrap_or_else(|| "U".to_string())
-                                                                    .chars()
-                                                                    .next()
-                                                                    .unwrap_or('U')
-                                                                    .to_uppercase()
-                                                                    .to_string()}
-                                                            </div>
-                                                        }
-                                                            .into_any()
-                                                    })}
-
-                                                <div class="flex-1 min-w-0">
-                                                    <p class="text-sm font-medium text-themed-primary truncate group-hover:opacity-80">
-                                                        {user
-                                                            .display_name
-                                                            .clone()
-                                                            .or(user.username.clone())
-                                                            .unwrap_or_else(|| "Anonymous".to_string())}
-                                                    </p>
-                                                    <p class="text-xs text-themed-secondary group-hover:opacity-80">
-                                                        "free"
-                                                    </p>
-                                                </div>
-                                                <div class="text-themed-secondary group-hover:text-themed-primary">
-                                                    "›"
-                                                </div>
-                                            </a>
-                                        }
-                                            .into_any()
-                                    }
-                                    Ok(None) => {
-                                        view! {
-                                            <Button
-                                                variant=ButtonVariant::Success
-                                                full_width=true
-                                                class="justify-center"
-                                                on_click=Callback::new(|_| {
-                                                    if let Some(window) = web_sys::window() {
-                                                        let _ = window.location().set_href("/admin");
-                                                    }
-                                                })
-                                            >
-
-                                                "Sign In"
-                                            </Button>
-                                        }
-                                            .into_any()
-                                    }
-                                    Err(_) => {
-                                        view! {
-                                            <div class="flex items-center justify-center p-3 bg-danger-500 text-white rounded-lg text-sm">
-                                                "Error loading user"
-                                            </div>
-                                        }
-                                            .into_any()
-                                    }
-                                }
-                            })
-                            .unwrap_or_else(|| {
-                                view! {
-                                    <div class="flex items-center justify-center p-3 card-themed text-sm text-themed-secondary">
-                                        "Loading user..."
-                                    </div>
-                                }
-                                    .into_any()
-                            })
-                    } else {
-                        view! {
-                            <Button
-                                variant=ButtonVariant::Success
-                                full_width=true
-                                class="justify-center"
-                                on_click=Callback::new(|_| {
-                                    if let Some(window) = web_sys::window() {
-                                        let _ = window.location().set_href("/admin");
-                                    }
-                                })
-                            >
-
-                                "Sign In"
-                            </Button>
-                        }
-                            .into_any()
-                    }
-                }}
-
-            </Transition>
-        </div>
-    }
-}
-
-// Helper function to build thread tree structure - make it deterministic
-fn build_thread_tree(threads: Vec<ThreadView>) -> Vec<ThreadNode> {
-    let mut all_nodes: std::collections::BTreeMap<String, ThreadNode> = threads
-        .into_iter()
-        .map(|thread| {
-            let id = thread.id.clone();
-            (id, ThreadNode {
-                thread,
-                children: Vec::new(),
-            })
-        })
-        .collect();
-
-    // Collect parent-child relationships and sort them for deterministic order
-    let mut relationships: Vec<(String, String)> = Vec::new(); // (child_id, parent_id)
-    for node in all_nodes.values() {
-        if let Some(parent_id) = &node.thread.parent_thread_id {
-            relationships.push((node.thread.id.clone(), parent_id.clone()));
-        }
-    }
-    
-    // Sort relationships for deterministic processing
-    relationships.sort();
-
-    // Move children to their parents
-    for (child_id, parent_id) in relationships {
-        if all_nodes.contains_key(&parent_id) {
-            if let Some(child_node) = all_nodes.remove(&child_id) {
-                if let Some(parent_node) = all_nodes.get_mut(&parent_id) {
-                    parent_node.children.push(child_node);
-                }
-            }
-        }
-    }
-
-    // Sort children within each parent by creation time for consistency
-    for node in all_nodes.values_mut() {
-        node.children.sort_by(|a, b| {
-            a.thread.created_at.cmp(&b.thread.created_at)
-        });
-    }
-
-    // Collect remaining nodes (these are roots) and sort by creation time
-    let mut roots: Vec<ThreadNode> = all_nodes.into_values().collect();
-    roots.sort_by(|a, b| {
-        b.thread.created_at.cmp(&a.thread.created_at)
-    });
-
-    roots
-}
-
-#[derive(Debug, Clone)]
-struct ThreadNode {
-    thread: ThreadView,
-    children: Vec<ThreadNode>,
-}
-
-// All the server functions remain the same
-#[server(SearchThreads, "/api")]
-pub async fn search_threads(query: String) -> Result<Vec<ThreadView>, ServerFnError> {
-    use chrono::DateTime;
-    use diesel::prelude::*;
-    use diesel_async::RunQueryDsl;
-    use std::fmt;
-
-    use crate::state::AppState;
-    use crate::schema::{threads, messages, projects};
-    use crate::auth::get_current_user;
-
-    #[derive(Debug)]
-    enum SearchError {
-        Pool(String),
-        Database(diesel::result::Error),
-        Unauthorized,
-    }
-
-    impl fmt::Display for SearchError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self {
-                SearchError::Pool(e) => write!(f, "pool error: {e}"),
-                SearchError::Database(e) => write!(f, "database error: {e}"),
-                SearchError::Unauthorized => write!(f, "unauthorized - user not logged in"),
-            }
-        }
-    }
-
-    impl From<SearchError> for ServerFnError {
-        fn from(error: SearchError) -> Self {
-            ServerFnError::ServerError(error.to_string())
-        }
-    }
-
-    fn to_server_error(e: SearchError) -> ServerFnError {
-        ServerFnError::ServerError(e.to_string())
-    }
-
-    let current_user = get_current_user().await.map_err(|_| SearchError::Unauthorized)?;
-    let other_user_id = current_user.ok_or(SearchError::Unauthorized)?.id;
-
-    let app_state = use_context::<AppState>()
-        .expect("failed to get AppState from context");
-
-    let mut conn = app_state.pool
-        .get()
-        .await
-        .map_err(|e| SearchError::Pool(e.to_string()))
-        .map_err(to_server_error)?;
-
-    let result = threads::table
-        .left_join(messages::table.on(messages::thread_id.eq(threads::id)))
-        .left_join(projects::table.on(threads::project_id.eq(projects::id.nullable())))
-        .filter(threads::user_id.eq(other_user_id))
-        .filter(
-            threads::id.ilike(format!("%{query}%"))
-                .or(messages::content.ilike(format!("%{query}%")))
-                .or(projects::name.ilike(format!("%{query}%")))
-        )
-        .select((
-            threads::id,
-            threads::created_at,
-            threads::updated_at,
-            threads::user_id,
-            threads::parent_thread_id,
-            threads::branch_point_message_id,
-            threads::branch_name,
-            threads::title,
-            threads::project_id,
-            projects::name.nullable(),
-        ))
-        .distinct()
-        .order(threads::created_at.desc())
-        .load::<(
-            String, 
-            Option<chrono::NaiveDateTime>, 
-            Option<chrono::NaiveDateTime>, 
-            Option<i32>, 
-            Option<String>, 
-            Option<i32>, 
-            Option<String>, 
-            Option<String>, 
-            Option<uuid::Uuid>, 
-            Option<String>
-        )>(&mut conn)
-        .await
-        .map_err(SearchError::Database)
-        .map_err(to_server_error)?;
-
-    let threads: Vec<ThreadView> = result
-        .into_iter()
-        .map(|(id, created_at, updated_at, user_id, parent_thread_id, branch_point_message_id, branch_name, title, project_id, project_name)| {
-            ThreadView {
-                id,
-                created_at: created_at.map(|dt| DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
-                updated_at: updated_at.map(|dt| DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
-                user_id,
-                parent_thread_id,
-                branch_point_message_id,
-                branch_name,
-                title,
-                project_id,
-                project_name,
-            }
-        })
-        .collect();
-
-    Ok(threads)
-}
-
-#[server(DeleteThread, "/api")]
-pub async fn delete_thread(thread_id: String) -> Result<(), ServerFnError> {
-    use diesel::prelude::*;
-    use diesel_async::{RunQueryDsl, AsyncConnection};
-    use crate::schema::{threads, messages};
-    use std::fmt;
-    use crate::state::AppState;
-    
-    #[derive(Debug)]
-    enum ThreadError {
-        Pool(String),
-        Database(diesel::result::Error),
-    }
-    
-    impl fmt::Display for ThreadError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self {
-                ThreadError::Pool(e) => write!(f, "pool error: {e}"),
-                ThreadError::Database(e)=> write!(f, "database error: {e}"),
-            }
-        }
-    }
-    
-    fn to_server_error(e: ThreadError) -> ServerFnError {
-        ServerFnError::ServerError(e.to_string())
-    }
-    
-    fn delete_thread_recursive<'a>(
-        conn: &'a mut diesel_async::AsyncPgConnection, 
-        thread_id: &'a str
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), diesel::result::Error>> + Send + 'a>> {
-        Box::pin(async move {
-
-        let child_threads: Vec<String> = threads::table
-            .filter(threads::parent_thread_id.eq(thread_id))
-            .select(threads::id)
-            .load(conn)
-            .await?;
-        
-        // Recursively delete child threads
-        for child_thread_id in child_threads {
-            delete_thread_recursive(conn, &child_thread_id).await?;
-        }
-        
-        // Get all message IDs that belong to this thread
-        let message_ids: Vec<i32> = messages::table
-            .filter(messages::thread_id.eq(thread_id))
-            .select(messages::id)
-            .load(conn)
-            .await?;
-        
-        // Update any threads that reference these messages
-        if !message_ids.is_empty() {
-            diesel::update(
-                threads::table.filter(
-                    threads::branch_point_message_id.eq_any(&message_ids)
-                )
-            )
-            .set(threads::branch_point_message_id.eq(None::<i32>))
-            .execute(conn)
-            .await?;
-        }
-        
-        // Delete all messages associated with this thread
-        diesel::delete(messages::table.filter(messages::thread_id.eq(thread_id)))
-            .execute(conn)
-            .await?;
-        
-        // Finally, delete the thread itself
-        diesel::delete(threads::table.find(thread_id))
-            .execute(conn)
-            .await?;
-        
-        Ok(())
-        })
-    }
-    
-    let app_state = use_context::<AppState>()
-        .expect("failed to get AppState from context");
-    let mut conn = app_state.pool
-        .get()
-        .await
-        .map_err(|e| ThreadError::Pool(e.to_string()))
-        .map_err(to_server_error)?;
-    
-    conn.transaction(|conn| {
-        Box::pin(async move {
-            delete_thread_recursive(conn, &thread_id).await
-        })
-    })
-    .await
-    .map_err(ThreadError::Database)
-    .map_err(to_server_error)?;
-    
-    Ok(())
-}
-
-#[server(GetThreads, "/api")]
-pub async fn get_threads() -> Result<Vec<ThreadView>, ServerFnError> {
-    use chrono::DateTime;
-    use diesel::prelude::*;
-    use diesel_async::RunQueryDsl;
-    use std::fmt;
-    use uuid::Uuid;
-
-    use crate::state::AppState;
-    use crate::schema::{threads, projects};
-    use crate::auth::get_current_user;
-
-    #[derive(Debug)]
-    enum ThreadError {
-        Pool(String),
-        Database(diesel::result::Error),
-        Unauthorized,
-    }
-
-    impl fmt::Display for ThreadError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self {
-                ThreadError::Pool(e) => write!(f, "Pool error: {e}"),
-                ThreadError::Database(e) => write!(f, "Database error: {e}"),
-                ThreadError::Unauthorized => write!(f, "Unauthorized"),
-            }
-        }
-    }
-
-    impl From<ThreadError> for ServerFnError {
-        fn from(error: ThreadError) -> Self {
-            ServerFnError::ServerError(error.to_string())
-        }
-    }
-
-    fn to_server_error(e: ThreadError) -> ServerFnError {
-        ServerFnError::ServerError(e.to_string())
-    }
-
-    let current_user = get_current_user().await.map_err(|_| ThreadError::Unauthorized)?;
-    let user_id = current_user.ok_or(ThreadError::Unauthorized)?.id;
-
-    let app_state = use_context::<AppState>()
-        .expect("Failed to get AppState from context");
-
-    let mut conn = app_state.pool
-        .get()
-        .await
-        .map_err(|e| ThreadError::Pool(e.to_string()))
-        .map_err(to_server_error)?;
-
-    let result = threads::table
-        .left_join(projects::table.on(threads::project_id.eq(projects::id.nullable())))
-        .filter(threads::user_id.eq(user_id))
-        .select((
-            threads::id,
-            threads::created_at,
-            threads::updated_at,
-            threads::user_id,
-            threads::parent_thread_id,
-            threads::branch_point_message_id,
-            threads::branch_name,
-            threads::title,
-            threads::project_id,
-            projects::name.nullable(), // Project name
-        ))
-        .order(threads::created_at.desc())
-        .load::<(String, Option<chrono::NaiveDateTime>, Option<chrono::NaiveDateTime>, Option<i32>, Option<String>, Option<i32>, Option<String>, Option<String>, Option<Uuid>, Option<String>)>(&mut conn)
-        .await
-        .map_err(ThreadError::Database)
-        .map_err(to_server_error)?;
-
-    let threads: Vec<ThreadView> = result
-        .into_iter()
-        .map(|(id, created_at, updated_at, user_id, parent_thread_id, branch_point_message_id, branch_name, title, project_id, project_name)| {
-            ThreadView {
-                id,
-                created_at: created_at.map(|dt| DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
-                updated_at: updated_at.map(|dt| DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
-                user_id,
-                parent_thread_id,
-                branch_point_message_id,
-                branch_name,
-                title,
-                project_id,
-                project_name,
-            }
-        })
-        .collect();
-
-    Ok(threads)
-}
-
-#[server(GetThreadBranches, "/api")]
-pub async fn get_thread_branches(thread_id: String) -> Result<Vec<crate::models::conversations::BranchInfo>, ServerFnError> {
-    use diesel::prelude::*;
-    use diesel_async::RunQueryDsl;
-    use std::fmt;
-    use std::error::Error;
-    use crate::state::AppState;
-    use crate::models::conversations::Thread;
-    use crate::schema::threads;
-    use crate::auth::get_current_user;
-    
-    #[derive(Debug)]
-    enum BranchError {
-        Pool(String),
-        Database(diesel::result::Error),
-        Unauthorized,
-    }
-    
-    impl fmt::Display for BranchError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self {
-                BranchError::Pool(e) => write!(f, "pool error: {e}"),
-                BranchError::Database(e) => write!(f, "database error: {e}"),
-                BranchError::Unauthorized => write!(f, "unauthorized - user not logged in"),
-            }
-        }
-    }
-    
-    impl Error for BranchError {
-        fn source(&self) -> Option<&(dyn Error + 'static)> {
-            match self {
-                BranchError::Database(e) => Some(e),
-                _ => None,
-            }
-        }
-    }
-    
-    let current_user = get_current_user().await.map_err(|_| BranchError::Unauthorized)?;
-    let user_id = current_user.ok_or(BranchError::Unauthorized)?.id;
-    
-    let app_state = use_context::<AppState>()
-        .expect("failed to get AppState from context");
-    
-    let mut conn = app_state.pool
-        .get()
-        .await
-        .map_err(|e| BranchError::Pool(e.to_string()))?;
-    
-    // Find all branches of this thread, ordered by branch_name as integer
-    let mut branches = threads::table
-        .filter(threads::parent_thread_id.eq(&thread_id))
-        .filter(threads::user_id.eq(user_id))
-        .order(threads::created_at.desc())
-        .load::<Thread>(&mut conn)
-        .await
-        .map_err(BranchError::Database)?;
-
-    // Sort by branch_name as integers (1, 2, 3, etc.)
-    branches.sort_by(|a, b| {
-        let a_num: i32 = a.branch_name.as_ref().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let b_num: i32 = b.branch_name.as_ref().and_then(|s| s.parse().ok()).unwrap_or(0);
-        a_num.cmp(&b_num)
-    });
-    
-    // Convert to BranchInfo with simplified data
-    let branch_infos: Vec<crate::models::conversations::BranchInfo> = branches
-        .into_iter()
-        .map(|branch| crate::models::conversations::BranchInfo {
-            thread_id: branch.id,
-            branch_name: branch.branch_name,
-            model: "mixed".to_string(), // Since branches can have multiple models
-            lab: "mixed".to_string(),   // Since branches can have multiple labs
-            created_at: branch.created_at.map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
-        })
-        .collect();
-    
-    Ok(branch_infos)
-}use leptos::prelude::*;
+use leptos::prelude::*;
 use leptos_icons::Icon;
 use leptos_fetch::QueryClient;
 use log::error;
@@ -1315,3 +729,592 @@ fn ThreadItemButton(
         }}
     }
 }
+
+#[component]
+fn UserInfo() -> impl IntoView {
+    let auth = use_context::<AuthContext>().expect("AuthContext not found");
+    let current_user = Resource::new(|| (), |_| get_current_user());
+
+    view! {
+        <div class="border-t border-themed pt-3 mt-3 p-4">
+            <Transition fallback=|| {
+                view! {
+                    <div class="flex items-center space-x-3 p-3 card-themed animate-pulse">
+                        <div class="w-10 h-10 bg-surface-secondary rounded-full"></div>
+                        <div class="flex-1 space-y-1">
+                            <div class="h-4 bg-surface-secondary rounded"></div>
+                            <div class="h-3 bg-surface-secondary rounded w-3/4"></div>
+                        </div>
+                    </div>
+                }
+            }>
+                {move || {
+                    if auth.is_loading.get() {
+                        view! {
+                            <div class="flex items-center space-x-3 p-3 card-themed animate-pulse">
+                                <div class="w-10 h-10 bg-surface-secondary rounded-full"></div>
+                                <div class="flex-1">
+                                    <div class="text-sm text-themed-secondary">"Loading..."</div>
+                                </div>
+                            </div>
+                        }
+                            .into_any()
+                    } else if auth.is_authenticated.get() {
+                        current_user
+                            .get()
+                            .map(|user_result| {
+                                match user_result {
+                                    Ok(Some(user)) => {
+                                        view! {
+                                            <a
+                                                href="/admin-panel"
+                                                class="flex items-center space-x-3 p-3 card-themed card-hover cursor-pointer group"
+                                            >
+                                                {user
+                                                    .avatar_url
+                                                    .as_ref()
+                                                    .map(|avatar| {
+                                                        view! {
+                                                            <img
+                                                                src=avatar.clone()
+                                                                alt="User avatar"
+                                                                class="w-10 h-10 rounded-full border-2 border-themed"
+                                                            />
+                                                        }
+                                                            .into_any()
+                                                    })
+                                                    .unwrap_or_else(|| {
+                                                        view! {
+                                                            <div class="w-10 h-10 bg-primary-600 rounded-full flex items-center justify-center text-white text-lg">
+                                                                {user
+                                                                    .display_name
+                                                                    .clone()
+                                                                    .or(user.username.clone())
+                                                                    .unwrap_or_else(|| "U".to_string())
+                                                                    .chars()
+                                                                    .next()
+                                                                    .unwrap_or('U')
+                                                                    .to_uppercase()
+                                                                    .to_string()}
+                                                            </div>
+                                                        }
+                                                            .into_any()
+                                                    })}
+
+                                                <div class="flex-1 min-w-0">
+                                                    <p class="text-sm font-medium text-themed-primary truncate group-hover:opacity-80">
+                                                        {user
+                                                            .display_name
+                                                            .clone()
+                                                            .or(user.username.clone())
+                                                            .unwrap_or_else(|| "Anonymous".to_string())}
+                                                    </p>
+                                                    <p class="text-xs text-themed-secondary group-hover:opacity-80">
+                                                        "free"
+                                                    </p>
+                                                </div>
+                                                <div class="text-themed-secondary group-hover:text-themed-primary">
+                                                    "›"
+                                                </div>
+                                            </a>
+                                        }
+                                            .into_any()
+                                    }
+                                    Ok(None) => {
+                                        view! {
+                                            <Button
+                                                variant=ButtonVariant::Success
+                                                full_width=true
+                                                class="justify-center"
+                                                on_click=Callback::new(|_| {
+                                                    if let Some(window) = web_sys::window() {
+                                                        let _ = window.location().set_href("/admin");
+                                                    }
+                                                })
+                                            >
+
+                                                "Sign In"
+                                            </Button>
+                                        }
+                                            .into_any()
+                                    }
+                                    Err(_) => {
+                                        view! {
+                                            <div class="flex items-center justify-center p-3 bg-danger-500 text-white rounded-lg text-sm">
+                                                "Error loading user"
+                                            </div>
+                                        }
+                                            .into_any()
+                                    }
+                                }
+                            })
+                            .unwrap_or_else(|| {
+                                view! {
+                                    <div class="flex items-center justify-center p-3 card-themed text-sm text-themed-secondary">
+                                        "Loading user..."
+                                    </div>
+                                }
+                                    .into_any()
+                            })
+                    } else {
+                        view! {
+                            <Button
+                                variant=ButtonVariant::Success
+                                full_width=true
+                                class="justify-center"
+                                on_click=Callback::new(|_| {
+                                    if let Some(window) = web_sys::window() {
+                                        let _ = window.location().set_href("/admin");
+                                    }
+                                })
+                            >
+
+                                "Sign In"
+                            </Button>
+                        }
+                            .into_any()
+                    }
+                }}
+
+            </Transition>
+        </div>
+    }
+}
+
+// Helper function to build thread tree structure - make it deterministic
+fn build_thread_tree(threads: Vec<ThreadView>) -> Vec<ThreadNode> {
+    let mut all_nodes: std::collections::BTreeMap<String, ThreadNode> = threads
+        .into_iter()
+        .map(|thread| {
+            let id = thread.id.clone();
+            (id, ThreadNode {
+                thread,
+                children: Vec::new(),
+            })
+        })
+        .collect();
+
+    // Collect parent-child relationships and sort them for deterministic order
+    let mut relationships: Vec<(String, String)> = Vec::new(); // (child_id, parent_id)
+    for node in all_nodes.values() {
+        if let Some(parent_id) = &node.thread.parent_thread_id {
+            relationships.push((node.thread.id.clone(), parent_id.clone()));
+        }
+    }
+    
+    // Sort relationships for deterministic processing
+    relationships.sort();
+
+    // Move children to their parents
+    for (child_id, parent_id) in relationships {
+        if all_nodes.contains_key(&parent_id) {
+            if let Some(child_node) = all_nodes.remove(&child_id) {
+                if let Some(parent_node) = all_nodes.get_mut(&parent_id) {
+                    parent_node.children.push(child_node);
+                }
+            }
+        }
+    }
+
+    // Sort children within each parent by creation time for consistency
+    for node in all_nodes.values_mut() {
+        node.children.sort_by(|a, b| {
+            a.thread.created_at.cmp(&b.thread.created_at)
+        });
+    }
+
+    // Collect remaining nodes (these are roots) and sort by creation time
+    let mut roots: Vec<ThreadNode> = all_nodes.into_values().collect();
+    roots.sort_by(|a, b| {
+        b.thread.created_at.cmp(&a.thread.created_at)
+    });
+
+    roots
+}
+
+#[derive(Debug, Clone)]
+struct ThreadNode {
+    thread: ThreadView,
+    children: Vec<ThreadNode>,
+}
+
+// All the server functions remain the same
+#[server(SearchThreads, "/api")]
+pub async fn search_threads(query: String) -> Result<Vec<ThreadView>, ServerFnError> {
+    use chrono::DateTime;
+    use diesel::prelude::*;
+    use diesel_async::RunQueryDsl;
+    use std::fmt;
+
+    use crate::state::AppState;
+    use crate::schema::{threads, messages, projects};
+    use crate::auth::get_current_user;
+
+    #[derive(Debug)]
+    enum SearchError {
+        Pool(String),
+        Database(diesel::result::Error),
+        Unauthorized,
+    }
+
+    impl fmt::Display for SearchError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                SearchError::Pool(e) => write!(f, "pool error: {e}"),
+                SearchError::Database(e) => write!(f, "database error: {e}"),
+                SearchError::Unauthorized => write!(f, "unauthorized - user not logged in"),
+            }
+        }
+    }
+
+    impl From<SearchError> for ServerFnError {
+        fn from(error: SearchError) -> Self {
+            ServerFnError::ServerError(error.to_string())
+        }
+    }
+
+    fn to_server_error(e: SearchError) -> ServerFnError {
+        ServerFnError::ServerError(e.to_string())
+    }
+
+    let current_user = get_current_user().await.map_err(|_| SearchError::Unauthorized)?;
+    let other_user_id = current_user.ok_or(SearchError::Unauthorized)?.id;
+
+    let app_state = use_context::<AppState>()
+        .expect("failed to get AppState from context");
+
+    let mut conn = app_state.pool
+        .get()
+        .await
+        .map_err(|e| SearchError::Pool(e.to_string()))
+        .map_err(to_server_error)?;
+
+    let result = threads::table
+        .left_join(messages::table.on(messages::thread_id.eq(threads::id)))
+        .left_join(projects::table.on(threads::project_id.eq(projects::id.nullable())))
+        .filter(threads::user_id.eq(other_user_id))
+        .filter(
+            threads::id.ilike(format!("%{query}%"))
+                .or(messages::content.ilike(format!("%{query}%")))
+                .or(projects::name.ilike(format!("%{query}%")))
+        )
+        .select((
+            threads::id,
+            threads::created_at,
+            threads::updated_at,
+            threads::user_id,
+            threads::parent_thread_id,
+            threads::branch_point_message_id,
+            threads::branch_name,
+            threads::title,
+            threads::project_id,
+            projects::name.nullable(),
+        ))
+        .distinct()
+        .order(threads::created_at.desc())
+        .load::<(
+            String, 
+            Option<chrono::NaiveDateTime>, 
+            Option<chrono::NaiveDateTime>, 
+            Option<i32>, 
+            Option<String>, 
+            Option<i32>, 
+            Option<String>, 
+            Option<String>, 
+            Option<uuid::Uuid>, 
+            Option<String>
+        )>(&mut conn)
+        .await
+        .map_err(SearchError::Database)
+        .map_err(to_server_error)?;
+
+    let threads: Vec<ThreadView> = result
+        .into_iter()
+        .map(|(id, created_at, updated_at, user_id, parent_thread_id, branch_point_message_id, branch_name, title, project_id, project_name)| {
+            ThreadView {
+                id,
+                created_at: created_at.map(|dt| DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
+                updated_at: updated_at.map(|dt| DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
+                user_id,
+                parent_thread_id,
+                branch_point_message_id,
+                branch_name,
+                title,
+                project_id,
+                project_name,
+            }
+        })
+        .collect();
+
+    Ok(threads)
+}
+
+#[server(DeleteThread, "/api")]
+pub async fn delete_thread(thread_id: String) -> Result<(), ServerFnError> {
+    use diesel::prelude::*;
+    use diesel_async::{RunQueryDsl, AsyncConnection};
+    use crate::schema::{threads, messages};
+    use std::fmt;
+    use crate::state::AppState;
+    
+    #[derive(Debug)]
+    enum ThreadError {
+        Pool(String),
+        Database(diesel::result::Error),
+    }
+    
+    impl fmt::Display for ThreadError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                ThreadError::Pool(e) => write!(f, "pool error: {e}"),
+                ThreadError::Database(e)=> write!(f, "database error: {e}"),
+            }
+        }
+    }
+    
+    fn to_server_error(e: ThreadError) -> ServerFnError {
+        ServerFnError::ServerError(e.to_string())
+    }
+    
+    fn delete_thread_recursive<'a>(
+        conn: &'a mut diesel_async::AsyncPgConnection, 
+        thread_id: &'a str
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), diesel::result::Error>> + Send + 'a>> {
+        Box::pin(async move {
+
+        let child_threads: Vec<String> = threads::table
+            .filter(threads::parent_thread_id.eq(thread_id))
+            .select(threads::id)
+            .load(conn)
+            .await?;
+        
+        // Recursively delete child threads
+        for child_thread_id in child_threads {
+            delete_thread_recursive(conn, &child_thread_id).await?;
+        }
+        
+        // Get all message IDs that belong to this thread
+        let message_ids: Vec<i32> = messages::table
+            .filter(messages::thread_id.eq(thread_id))
+            .select(messages::id)
+            .load(conn)
+            .await?;
+        
+        // Update any threads that reference these messages
+        if !message_ids.is_empty() {
+            diesel::update(
+                threads::table.filter(
+                    threads::branch_point_message_id.eq_any(&message_ids)
+                )
+            )
+            .set(threads::branch_point_message_id.eq(None::<i32>))
+            .execute(conn)
+            .await?;
+        }
+        
+        // Delete all messages associated with this thread
+        diesel::delete(messages::table.filter(messages::thread_id.eq(thread_id)))
+            .execute(conn)
+            .await?;
+        
+        // Finally, delete the thread itself
+        diesel::delete(threads::table.find(thread_id))
+            .execute(conn)
+            .await?;
+        
+        Ok(())
+        })
+    }
+    
+    let app_state = use_context::<AppState>()
+        .expect("failed to get AppState from context");
+    let mut conn = app_state.pool
+        .get()
+        .await
+        .map_err(|e| ThreadError::Pool(e.to_string()))
+        .map_err(to_server_error)?;
+    
+    conn.transaction(|conn| {
+        Box::pin(async move {
+            delete_thread_recursive(conn, &thread_id).await
+        })
+    })
+    .await
+    .map_err(ThreadError::Database)
+    .map_err(to_server_error)?;
+    
+    Ok(())
+}
+
+#[server(GetThreads, "/api")]
+pub async fn get_threads() -> Result<Vec<ThreadView>, ServerFnError> {
+    use chrono::DateTime;
+    use diesel::prelude::*;
+    use diesel_async::RunQueryDsl;
+    use std::fmt;
+    use uuid::Uuid;
+
+    use crate::state::AppState;
+    use crate::schema::{threads, projects};
+    use crate::auth::get_current_user;
+
+    #[derive(Debug)]
+    enum ThreadError {
+        Pool(String),
+        Database(diesel::result::Error),
+        Unauthorized,
+    }
+
+    impl fmt::Display for ThreadError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                ThreadError::Pool(e) => write!(f, "Pool error: {e}"),
+                ThreadError::Database(e) => write!(f, "Database error: {e}"),
+                ThreadError::Unauthorized => write!(f, "Unauthorized"),
+            }
+        }
+    }
+
+    impl From<ThreadError> for ServerFnError {
+        fn from(error: ThreadError) -> Self {
+            ServerFnError::ServerError(error.to_string())
+        }
+    }
+
+    fn to_server_error(e: ThreadError) -> ServerFnError {
+        ServerFnError::ServerError(e.to_string())
+    }
+
+    let current_user = get_current_user().await.map_err(|_| ThreadError::Unauthorized)?;
+    let user_id = current_user.ok_or(ThreadError::Unauthorized)?.id;
+
+    let app_state = use_context::<AppState>()
+        .expect("Failed to get AppState from context");
+
+    let mut conn = app_state.pool
+        .get()
+        .await
+        .map_err(|e| ThreadError::Pool(e.to_string()))
+        .map_err(to_server_error)?;
+
+    let result = threads::table
+        .left_join(projects::table.on(threads::project_id.eq(projects::id.nullable())))
+        .filter(threads::user_id.eq(user_id))
+        .select((
+            threads::id,
+            threads::created_at,
+            threads::updated_at,
+            threads::user_id,
+            threads::parent_thread_id,
+            threads::branch_point_message_id,
+            threads::branch_name,
+            threads::title,
+            threads::project_id,
+            projects::name.nullable(), // Project name
+        ))
+        .order(threads::created_at.desc())
+        .load::<(String, Option<chrono::NaiveDateTime>, Option<chrono::NaiveDateTime>, Option<i32>, Option<String>, Option<i32>, Option<String>, Option<String>, Option<Uuid>, Option<String>)>(&mut conn)
+        .await
+        .map_err(ThreadError::Database)
+        .map_err(to_server_error)?;
+
+    let threads: Vec<ThreadView> = result
+        .into_iter()
+        .map(|(id, created_at, updated_at, user_id, parent_thread_id, branch_point_message_id, branch_name, title, project_id, project_name)| {
+            ThreadView {
+                id,
+                created_at: created_at.map(|dt| DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
+                updated_at: updated_at.map(|dt| DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
+                user_id,
+                parent_thread_id,
+                branch_point_message_id,
+                branch_name,
+                title,
+                project_id,
+                project_name,
+            }
+        })
+        .collect();
+
+    Ok(threads)
+}
+
+#[server(GetThreadBranches, "/api")]
+pub async fn get_thread_branches(thread_id: String) -> Result<Vec<crate::models::conversations::BranchInfo>, ServerFnError> {
+    use diesel::prelude::*;
+    use diesel_async::RunQueryDsl;
+    use std::fmt;
+    use std::error::Error;
+    use crate::state::AppState;
+    use crate::models::conversations::Thread;
+    use crate::schema::threads;
+    use crate::auth::get_current_user;
+    
+    #[derive(Debug)]
+    enum BranchError {
+        Pool(String),
+        Database(diesel::result::Error),
+        Unauthorized,
+    }
+    
+    impl fmt::Display for BranchError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                BranchError::Pool(e) => write!(f, "pool error: {e}"),
+                BranchError::Database(e) => write!(f, "database error: {e}"),
+                BranchError::Unauthorized => write!(f, "unauthorized - user not logged in"),
+            }
+        }
+    }
+    
+    impl Error for BranchError {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            match self {
+                BranchError::Database(e) => Some(e),
+                _ => None,
+            }
+        }
+    }
+    
+    let current_user = get_current_user().await.map_err(|_| BranchError::Unauthorized)?;
+    let user_id = current_user.ok_or(BranchError::Unauthorized)?.id;
+    
+    let app_state = use_context::<AppState>()
+        .expect("failed to get AppState from context");
+    
+    let mut conn = app_state.pool
+        .get()
+        .await
+        .map_err(|e| BranchError::Pool(e.to_string()))?;
+    
+    // Find all branches of this thread, ordered by branch_name as integer
+    let mut branches = threads::table
+        .filter(threads::parent_thread_id.eq(&thread_id))
+        .filter(threads::user_id.eq(user_id))
+        .order(threads::created_at.desc())
+        .load::<Thread>(&mut conn)
+        .await
+        .map_err(BranchError::Database)?;
+
+    // Sort by branch_name as integers (1, 2, 3, etc.)
+    branches.sort_by(|a, b| {
+        let a_num: i32 = a.branch_name.as_ref().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let b_num: i32 = b.branch_name.as_ref().and_then(|s| s.parse().ok()).unwrap_or(0);
+        a_num.cmp(&b_num)
+    });
+    
+    // Convert to BranchInfo with simplified data
+    let branch_infos: Vec<crate::models::conversations::BranchInfo> = branches
+        .into_iter()
+        .map(|branch| crate::models::conversations::BranchInfo {
+            thread_id: branch.id,
+            branch_name: branch.branch_name,
+            model: "mixed".to_string(), // Since branches can have multiple models
+            lab: "mixed".to_string(),   // Since branches can have multiple labs
+            created_at: branch.created_at.map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)),
+        })
+        .collect();
+    
+    Ok(branch_infos)
+}
+
