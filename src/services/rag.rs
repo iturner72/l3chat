@@ -10,7 +10,7 @@ pub mod rag_service {
     };
     use axum::response::sse::Event;
     use futures::StreamExt;
-    use log::{debug, error};
+    use log::{debug, info, error};
     use serde::{Deserialize, Serialize};
     use std::convert::Infallible;
     use tokio::sync::mpsc;
@@ -20,7 +20,7 @@ pub mod rag_service {
 
     use crate::database::db::DbPool;
     use crate::models::projects::ProjectSearchResult;
-    use crate::services::projects::ProjectsService;
+    use crate::services::projects::{EnhancedProjectsService, ContextStrategy};
     use crate::models::conversations::Message;
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -51,7 +51,7 @@ pub mod rag_service {
         anthropic_api_key: Option<String>,
         provider: LLMProvider,
         model: String,
-        projects_service: ProjectsService,
+        projects_service: EnhancedProjectsService,
     }
 
     impl ProjectRagService {
@@ -63,7 +63,13 @@ pub mod rag_service {
                 anthropic_api_key: None,
                 provider: LLMProvider::OpenAI,
                 model,
-                projects_service: ProjectsService::new(),
+                projects_service: EnhancedProjectsService::new()
+                    .with_strategy(ContextStrategy {
+                        max_total_tokens: 80_000, // Leave room for conversation + response
+                        max_full_documents: 8,
+                        small_file_threshold: 300, // Lines
+                        chunk_expansion_lines: 25,
+                    }),
             }
         }
 
@@ -78,7 +84,13 @@ pub mod rag_service {
                 anthropic_api_key: Some(api_key),
                 provider: LLMProvider::Anthropic,
                 model,
-                projects_service: ProjectsService::new(),
+                projects_service: EnhancedProjectsService::new()
+                    .with_strategy(ContextStrategy {
+                        max_total_tokens: 80_000,
+                        max_full_documents: 8,
+                        small_file_threshold: 300,
+                        chunk_expansion_lines: 25,
+                    }),
             })
         }
 
@@ -103,14 +115,14 @@ pub mod rag_service {
                 message_type: "status".to_string(),
                 content: None,
                 citations: None,
-                status: Some("Searching project documents...".to_string()),
+                status: Some("Analyzing project documents...".to_string()),
             }).await?;
 
-            // Step 2: Search project documents
-            let search_results = match self.projects_service.search_project(pool, project_id, &query, 5).await {
-                Ok(results) => results,
+            // Step 2: Use enhanced search with intelligent context
+            let working_context = match self.projects_service.search_project_with_context(pool, project_id, &query, 5).await {
+                Ok(context) => context,
                 Err(e) => {
-                    error!("Failed to search project documents: {}", e);
+                    error!("Failed to search project documents: {e}");
                     self.send_response(&tx, RagResponse {
                         message_type: "error".to_string(),
                         content: Some("Failed to search project documents".to_string()),
@@ -125,17 +137,24 @@ pub mod rag_service {
                 return Ok(());
             }
 
-            debug!("Found {} relevant document chunks", search_results.len());
+            info!("Found {} relevant documents with {} total tokens", 
+                   working_context.documents.len(), working_context.total_tokens);
 
-            // Step 3: Send citations if we found relevant documents
-            if !search_results.is_empty() {
-                let citations: Vec<DocumentCitation> = search_results
+            // Step 3: Send enhanced citations
+            if !working_context.documents.is_empty() {
+                let citations: Vec<DocumentCitation> = working_context.documents
                     .iter()
-                    .map(|result| DocumentCitation {
-                        filename: result.filename.clone(),
-                        chunk_text: result.chunk_text.clone(),
-                        similarity: result.similarity,
-                        chunk_index: result.chunk_index,
+                    .flat_map(|doc| {
+                        doc.relevant_chunks.iter().map(|chunk| DocumentCitation {
+                            filename: doc.filename.clone(),
+                            chunk_text: if chunk.chunk_text.len() > 200 {
+                                format!("{}...", &chunk.chunk_text[..200])
+                            } else {
+                                chunk.chunk_text.clone()
+                            },
+                            similarity: chunk.similarity,
+                            chunk_index: chunk.chunk_index,
+                        })
                     })
                     .collect();
 
@@ -151,18 +170,17 @@ pub mod rag_service {
                 return Ok(());
             }
 
-            // Step 4: Get conversation history for context
+            // Step 4: Get conversation history and create enhanced context
             let conversation_history = self.get_conversation_history(pool, thread_id).await?;
+            let formatted_context = self.projects_service.format_context_for_llm(&working_context);
 
-            // Step 5: Create context and generate response
-            let context = self.create_project_context(&search_results);
-            
+            // Step 5: Generate response with enhanced context
             match self.provider {
                 LLMProvider::OpenAI => {
                     if let Some(ref client) = self.openai_client {
                         self.generate_openai_response(
                             query,
-                            context,
+                            formatted_context,
                             conversation_history,
                             tx,
                             client,
@@ -177,7 +195,7 @@ pub mod rag_service {
                         if let Some(ref api_key) = self.anthropic_api_key {
                             self.generate_anthropic_response(
                                 query,
-                                context,
+                                formatted_context,
                                 conversation_history,
                                 tx,
                                 client,
@@ -196,7 +214,8 @@ pub mod rag_service {
             Ok(())
         }
 
-        fn create_project_context(&self, search_results: &[ProjectSearchResult]) -> String {
+        // Keep the old method for backward compatibility with legacy search results
+        fn _create_project_context(&self, search_results: &[ProjectSearchResult]) -> String {
             if search_results.is_empty() {
                 return "No relevant documents found in the project.".to_string();
             }
@@ -215,7 +234,39 @@ pub mod rag_service {
             context
         }
 
-        fn create_system_prompt(&self, context: String) -> String {
+        fn create_enhanced_system_prompt(&self, context: String) -> String {
+            format!(
+                r#"You are an AI assistant specialized in helping users understand and work with their project codebase. 
+You have access to a comprehensive knowledge base built from the user's uploaded documents, which includes
+full file context and intelligently selected code sections.
+
+KEY INSTRUCTIONS:
+- You are operating in an enhanced RAG (Retrieval-Augmented Generation) system
+- Answer questions based on the provided project context, which includes full files when relevant
+- The context includes priority scoring - pay attention to highly relevant files and chunks
+- When files are partially shown, understand that you're seeing the most relevant sections with context
+- Always reference specific files and line numbers when relevant
+- If the provided context doesn't contain enough information, say so clearly and suggest what additional context might help
+- Be precise about which files and sections support your answer
+- Consider the relationships between different files and how they work together
+- Format your response in markdown for better readability
+- Provide actionable insights and suggestions when appropriate
+
+When referencing code:
+- Use **[Filename]** for file references
+- Use **[Filename:lines X-Y]** for specific line ranges when provided
+- Explain not just what the code does, but how it fits into the larger system
+
+PROJECT CONTEXT:
+{context}
+
+Remember: You have access to intelligently selected file content. Use this context to provide comprehensive,
+accurate answers about the codebase structure, functionality, and relationships between components."#,
+            )
+        }
+
+        // Legacy system prompt method for backward compatibility
+        fn _create_system_prompt(&self, context: String) -> String {
             format!(
                 r#"You are an AI assistant specialized in helping users understand and work with their project documents. 
         You have access to a knowledge base built from the user's uploaded documents, which have been chunked 
@@ -269,7 +320,8 @@ pub mod rag_service {
                 status: Some("Generating response...".to_string()),
             }).await?;
 
-            let system_prompt = self.create_system_prompt(context);
+            // Use enhanced system prompt for better context understanding
+            let system_prompt = self.create_enhanced_system_prompt(context);
             let system_message = ChatCompletionRequestSystemMessage {
                 content: system_prompt.into(),
                 name: None,
@@ -383,7 +435,8 @@ pub mod rag_service {
                 status: Some("Generating response with Claude...".to_string()),
             }).await?;
 
-            let system_prompt = self.create_system_prompt(context);
+            // Use enhanced system prompt for better context understanding
+            let system_prompt = self.create_enhanced_system_prompt(context);
 
             // Convert conversation history to Anthropic format
             let mut api_messages = Vec::new();
@@ -548,7 +601,7 @@ pub mod rag_service {
         match provider {
             "openai" => Ok(ProjectRagService::new_openai(model)),
             "anthropic" => ProjectRagService::new_anthropic(model),
-            _ => Err(format!("Unsupported LLM provider: {}", provider).into()),
+            _ => Err(format!("Unsupported LLM provider: {provider}").into()),
         }
     }
 }

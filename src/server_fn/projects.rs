@@ -1,7 +1,9 @@
+use cfg_if::cfg_if;
 use leptos::prelude::*;
 use uuid::Uuid;
 
 use crate::models::projects::*;
+
 #[server(CreateProject, "/api")]
 pub async fn create_project(project_data: NewProjectView) -> Result<ProjectView, ServerFnError> {
     use diesel_async::RunQueryDsl;
@@ -128,7 +130,7 @@ pub async fn upload_document(
     use crate::models::projects::{NewProjectDocument, ProjectDocument};
     use crate::schema::{projects, project_documents};
     use crate::auth::get_current_user;
-    use crate::services::projects::ProjectsService;
+    use crate::services::projects::EnhancedProjectsService;
 
     #[derive(Debug)]
     enum DocumentError {
@@ -198,7 +200,7 @@ pub async fn upload_document(
     let content_for_processing = content.clone();
     
     tokio::spawn(async move {
-        let service = ProjectsService::new();
+        let service = EnhancedProjectsService::new();
         if let Err(e) = service.process_document(&pool, document_id, &content_for_processing).await {
             log::error!("Failed to process document {}: {}", document_id, e);
         } else {
@@ -276,17 +278,20 @@ pub async fn get_project_documents(project_id: Uuid) -> Result<Vec<ProjectDocume
     Ok(documents.into_iter().map(ProjectDocumentView::from).collect())
 }
 
+cfg_if! {
+if #[cfg(feature = "ssr")] {
+use crate::services::projects::WorkingContext;
 #[server(SearchProject, "/api")]
 pub async fn search_project(
     project_id: Uuid,
     query: String,
-) -> Result<Vec<ProjectSearchResult>, ServerFnError> {
+) -> Result<WorkingContext, ServerFnError> {
     use std::fmt;
 
     use crate::state::AppState;
     use crate::schema::projects;
     use crate::auth::get_current_user;
-    use crate::services::projects::ProjectsService;
+    use crate::services::projects::EnhancedProjectsService;
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;
 
@@ -338,14 +343,15 @@ pub async fn search_project(
         .map_err(SearchError::Database)?
         .ok_or(SearchError::ProjectNotFound)?;
 
-    let service = ProjectsService::new();
+    let service = EnhancedProjectsService::new();
     let results = service
-        .search_project(&app_state.pool, project_id, &query, 10)
+        .search_project_with_context(&app_state.pool, project_id, &query, 10)
         .await
         .map_err(|e| SearchError::SearchError(e.to_string()))?;
 
     Ok(results)
 }
+}}
 
 #[server(CreateProjectThread, "/api")]
 pub async fn create_project_thread(project_id: Uuid) -> Result<String, ServerFnError> {
