@@ -2,9 +2,23 @@ use cfg_if::cfg_if;
 use leptos::prelude::*;
 use uuid::Uuid;
 
+#[cfg(feature = "ssr")]
+use tracing;
+
 use crate::models::projects::*;
 
 #[server(CreateProject, "/api")]
+#[cfg_attr(feature = "ssr", tracing::instrument(
+    name = "create_project",
+    skip(project_data),
+    fields(
+        project_name = %project_data.name,
+        has_description = !project_data.description.as_ref().map_or(true, |d| d.is_empty()),
+        has_instructions = !project_data.instructions.as_ref().map_or(true, |i| i.is_empty()),
+        operation = "project_creation"
+    ),
+    err
+))]
 pub async fn create_project(project_data: NewProjectView) -> Result<ProjectView, ServerFnError> {
     use diesel_async::RunQueryDsl;
     use std::fmt;
@@ -37,25 +51,61 @@ pub async fn create_project(project_data: NewProjectView) -> Result<ProjectView,
         }
     }
 
-    let current_user = get_current_user().await.map_err(|_| ProjectError::Unauthorized)?;
-    let user_id = current_user.ok_or(ProjectError::Unauthorized)?.id;
+    tracing::debug!("Starting project creation");
+
+    let current_user = get_current_user().await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to get current user");
+        ProjectError::Unauthorized
+    })?;
+
+    let user_id = current_user.ok_or_else(|| {
+        tracing::warn!("No authenticated user found");
+        ProjectError::Unauthorized
+    })?.id;
+
+    tracing::debug!(user_id = %user_id, "User authenticated successfully");
 
     let app_state = use_context::<AppState>()
         .expect("Failed to get AppState from context");
     
+    tracing::debug!("Getting database connection");
     let mut conn = app_state.pool
         .get()
         .await
-        .map_err(|e| ProjectError::Pool(e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to get database connection");
+            ProjectError::Pool(e.to_string())
+        })?;
 
     let mut new_project: NewProject = project_data.into();
     new_project.user_id = user_id;
+
+    tracing::debug!(
+        project_name = %new_project.name,
+        user_id = %user_id,
+        "Inserting project into database"
+    );
 
     let project: Project = diesel::insert_into(projects::table)
         .values(&new_project)
         .get_result(&mut conn)
         .await
-        .map_err(ProjectError::Database)?;
+        .map_err(|e| {
+            tracing::error!(
+                error = %e,
+                project_name = %new_project.name,
+                user_id = %user_id,
+                "Failed to insert project into database"
+            );
+            ProjectError::Database(e)
+        })?;
+
+    tracing::info!(
+        project_id = %project.id,
+        project_name = %project.name,
+        user_id = %user_id,
+        "Project created successfully"
+    );
 
     Ok(project.into())
 }

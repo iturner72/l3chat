@@ -1,4 +1,5 @@
 use cfg_if::cfg_if;
+use tracing_subscriber::fmt::format::FmtSpan;
 
 cfg_if! {
     if #[cfg(feature = "ssr")] {
@@ -13,7 +14,7 @@ cfg_if! {
         };
         use dashmap::DashMap;
         use dotenv::dotenv;
-        use env_logger::Env;
+        use tracing_subscriber::EnvFilter;
         use l3chat::state::AppState;
         use leptos::prelude::*;
         use leptos_axum::{generate_route_list, handle_server_fns_with_context, LeptosRoutes};
@@ -27,13 +28,28 @@ cfg_if! {
             send_message_stream_handler,
             title_updates_handler,
         };
+        use l3chat::middleware::tracing::{ColoredFields, trace_requests};
         use std::net::SocketAddr;
         use std::sync::Arc;
 
         #[tokio::main]
         async fn main() {
             dotenv().ok();
-            env_logger::init_from_env(Env::default().default_filter_or("info"));
+
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| EnvFilter::new("info,l3chat=debug"))
+                )
+                .with_target(true)
+                .with_file(true)
+                .with_line_number(true)
+                .with_thread_ids(true)
+                .with_thread_names(true)
+                .with_span_events(FmtSpan::CLOSE)
+                .pretty()
+                .fmt_fields(ColoredFields)
+                .init();
 
             let conf = get_configuration(None).unwrap();
             let addr = conf.leptos_options.site_addr;
@@ -99,6 +115,7 @@ cfg_if! {
                     handler(request).await.into_response()
                 }))
                 .fallback(leptos_axum::file_and_error_handler::<AppState, _>(shell))
+                .layer(middleware::from_fn(trace_requests))
                 .with_state(app_state);
 
             log::info!("Starting server at {addr}");

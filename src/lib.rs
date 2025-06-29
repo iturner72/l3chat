@@ -5,6 +5,7 @@ pub mod cancellable_sse;
 pub mod components;
 pub mod database;
 pub mod handlers;
+pub mod middleware;
 pub mod models;
 pub mod pages;
 #[cfg(feature = "ssr")]
