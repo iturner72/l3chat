@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::auth::{context::AuthContext, get_current_user};
 use crate::models::conversations::ThreadView;
 use crate::components::ui::{Button, IconButton, ButtonVariant, ButtonSize};
+use crate::pages::writersroom::ThreadContext;
 
 pub async fn get_threads_query() -> Result<Vec<ThreadView>, String> {
     get_threads().await.map_err(|e| e.to_string())
@@ -35,60 +36,14 @@ pub fn ThreadList(
     let client: QueryClient = expect_context();
     let (search_query, set_search_query) = signal(String::new());
     let (is_search_focused, set_is_search_focused) = signal(false);
-    let (_title_updates, _set_title_updates) = signal(std::collections::HashMap::<String, String>::new());
-    let (_sse_connected, _set_sse_connected) = signal(false);
     let (hotkey_text, set_hotkey_text) = signal("Ctrl+K");
+
+    let thread_context = use_context::<ThreadContext>()
+        .expect("ThreadContext should be available");
+    let title_updates = thread_context.title_updates;
 
     // Node ref for the search input
     let search_input_ref = NodeRef::<leptos::html::Input>::new();
-
-    // Set up SSE connection for title updates
-    cfg_if! {
-        if #[cfg(feature = "hydrate")] {
-            Effect::new(move |_| {
-                use wasm_bindgen_futures::spawn_local;
-                use web_sys::{EventSource, MessageEvent, ErrorEvent};
-                use wasm_bindgen::{prelude::*, JsCast};
-                use crate::types::TitleUpdate;
-
-                spawn_local(async move {
-                    log::debug!("Setting up SSE connection for title updates");
-                    
-                    match EventSource::new("/api/title-updates") {
-                        Ok(event_source) => {
-                            _set_sse_connected.set(true);
-                            
-                            let onmessage_callback = Closure::wrap(Box::new(move |e: MessageEvent| {
-                                if let Some(data) = e.data().as_string() {
-                                    log::debug!("Received SSE message: {}", data);
-                                    
-                                    if let Ok(title_update) = serde_json::from_str::<TitleUpdate>(&data) {
-                                        _set_title_updates.update(|updates| {
-                                            updates.insert(title_update.thread_id.clone(), title_update.title.clone());
-                                        });
-                                    }
-                                }
-                            }) as Box<dyn FnMut(_)>);
-                            
-                            event_source.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
-                            onmessage_callback.forget();
-                            
-                            let onerror_callback = Closure::wrap(Box::new(move |_: ErrorEvent| {
-                                log::error!("SSE connection error for title updates");
-                                _set_sse_connected.set(false);
-                            }) as Box<dyn FnMut(_)>);
-                            
-                            event_source.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
-                            onerror_callback.forget();
-                        }
-                        Err(e) => {
-                            log::error!("Failed to create EventSource: {:?}", e);
-                        }
-                    }
-                });
-            });
-        }
-    }
 
     let threads_resource = client.resource(get_threads_query, || ());
     let search_resource = client.resource(search_threads_query, move || search_query.get());
@@ -355,7 +310,7 @@ pub fn ThreadList(
 
                                                             delete_action=delete_thread_action
                                                             depth=0
-                                                            title_updates=_title_updates
+                                                            title_updates=title_updates
                                                             is_highlighted=is_thread_highlighted
                                                         />
                                                     }

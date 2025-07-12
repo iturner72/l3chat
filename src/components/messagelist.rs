@@ -110,11 +110,16 @@ pub fn MessageList(
     #[prop(optional)] pending_messages: Option<ReadSignal<Vec<PendingMessage>>>,
     #[prop(optional)] search_term: Option<ReadSignal<String>>,
     #[prop(optional)] search_action: Option<ReadSignal<bool>>,
+    #[prop(optional)] title_updates: Option<ReadSignal<std::collections::HashMap<String, String>>>,
 ) -> impl IntoView {
 
     let current_user = Resource::new(|| (), |_| get_current_user());
 
     let client: QueryClient = expect_context();
+
+    let title_updates = title_updates.unwrap_or_else(|| {
+        signal(std::collections::HashMap::<String, String>::new()).0
+    });
     
     // Search navigation state
     let (current_match_index, set_current_match_index) = signal(0);
@@ -351,6 +356,40 @@ pub fn MessageList(
     view! {
         <div class="h-full flex flex-col w-full overflow-hidden">
 
+            // BANNER: Real-time title generation indicator for current thread
+            {move || {
+                let current_thread = current_thread_id.get();
+                let updates = title_updates.get();
+                if let Some(title_update) = updates.get(&current_thread) {
+                    if title_update.contains("Generating") || title_update.contains("...") {
+                        view! {
+                            <div class="flex-shrink-0 mb-3 p-3 bg-gradient-to-r from-mint-100 to-seafoam-100 dark:from-mint-900 dark:to-seafoam-900 rounded-lg border border-mint-300 dark:border-mint-600">
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center space-x-2">
+                                        <div class="animate-spin">
+                                            <Icon icon=icondata_bs::BsStars width="16" height="16"/>
+                                        </div>
+                                        <span class="text-sm font-medium text-mint-800 dark:text-mint-200">
+                                            "AI is generating a title for this thread..."
+                                        </span>
+                                    </div>
+                                    <span class="text-xs text-mint-600 dark:text-mint-400 font-mono animate-pulse">
+                                        "LIVE"
+                                    </span>
+                                </div>
+                                <div class="mt-2 p-2 bg-white/50 dark:bg-black/20 rounded text-sm text-mint-700 dark:text-mint-300 font-mono">
+                                    "\"" {title_update.clone()} "\""
+                                </div>
+                            </div>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <div></div> }.into_any()
+                    }
+                } else {
+                    view! { <div></div> }.into_any()
+                }
+            }}
             // Search Results Header
             <div class="flex-shrink-0 mb-4">
                 {move || {
@@ -433,6 +472,9 @@ pub fn MessageList(
                                                 <div class="card-themed p-3 mt-3">
                                                     <h4 class="text-sm font-medium text-themed-primary mb-3">
                                                         "Thread Branches:"
+                                                        <span class="text-xs px-2 py-1 bg-gray-300 dark:bg-teal-700 text-gray-600 dark:text-gray-300 rounded-full">
+                                                            {branches.len()}
+                                                        </span>
                                                     </h4>
                                                     <div class="flex flex-wrap gap-2">
                                                         {branches
@@ -440,31 +482,20 @@ pub fn MessageList(
                                                             .map(|branch| {
                                                                 let branch_id = branch.thread_id.clone();
                                                                 let is_current = current_thread_id.get() == branch_id;
+                                                                let branch_name = branch
+                                                                    .branch_name
+                                                                    .clone()
+                                                                    .unwrap_or_else(|| "?".to_string());
                                                                 view! {
-                                                                    <Button
-                                                                        variant=if is_current {
-                                                                            ButtonVariant::Primary
-                                                                        } else {
-                                                                            ButtonVariant::Outline
-                                                                        }
-
-                                                                        size=ButtonSize::Small
-                                                                        on_click=Callback::new(move |_| {
-                                                                            set_current_thread_id.set(branch_id.clone())
+                                                                    <BranchCard
+                                                                        branch_id=branch_id
+                                                                        branch_name=branch_name
+                                                                        current_thread_id=current_thread_id
+                                                                        title_updates=title_updates
+                                                                        on_click=Callback::new(move |id: String| {
+                                                                            set_current_thread_id.set(id)
                                                                         })
-                                                                    >
-
-                                                                        <div class="inline-flex items-center gap-1">
-                                                                            <div class="rotate-180-mirror">
-                                                                                <Icon
-                                                                                    icon=icondata_mdi::MdiSourceBranch
-                                                                                    width="16"
-                                                                                    height="16"
-                                                                                />
-                                                                            </div>
-                                                                            {branch.branch_name.unwrap_or_else(|| "branch".to_string())}
-                                                                        </div>
-                                                                    </Button>
+                                                                    />
                                                                 }
                                                             })
                                                             .collect_view()}
@@ -483,9 +514,8 @@ pub fn MessageList(
                     }}
 
                 </Transition>
-            </div>
-
             // Messages Container
+            </div>
             <div class="flex-1 overflow-y-auto overflow-x-hidden pr-2 min-w-0 w-full scrollbar-themed">
                 <Transition fallback=move || {
                     view! {
@@ -749,6 +779,142 @@ pub fn MessageList(
             </div>
         </div>
     }.into_any()
+}
+
+#[component]
+fn BranchCard(
+    branch_id: String,
+    branch_name: String,
+    current_thread_id: ReadSignal<String>,
+    title_updates: ReadSignal<std::collections::HashMap<String, String>>,
+    #[prop(into)] on_click: Callback<String>,
+) -> impl IntoView {
+    let branch_id_for_click = branch_id.clone();
+    let branch_id_for_status = branch_id.clone();
+    let branch_id_for_title = branch_id.clone();
+    let branch_id_for_current_check = branch_id.clone();
+    let branch_name_display = branch_name.clone();
+    
+    let is_current = move || current_thread_id.get() == branch_id;
+    
+    view! {
+        <div
+            class=move || {
+                let is_current = current_thread_id.get() == branch_id_for_current_check;
+                format!(
+                    "border rounded-lg p-3 cursor-pointer transition-all duration-200 {}",
+                    if is_current {
+                        "border-seafoam-500 dark:border-mint-400 bg-seafoam-50 dark:bg-mint-900/50"
+                    } else {
+                        "border-gray-300 dark:border-teal-600 hover:border-seafoam-300 dark:hover:border-mint-600 hover:bg-gray-100 dark:hover:bg-teal-700/50"
+                    },
+                )
+            }
+
+            on:click=move |_| on_click.run(branch_id_for_click.clone())
+        >
+            <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                    <div class="rotate-180-mirror text-gray-600 dark:text-gray-400">
+                        <Icon icon=icondata_mdi::MdiSourceBranch width="16" height="16"/>
+                    </div>
+                    <span class="font-medium text-gray-800 dark:text-gray-200">
+                        "Branch " {branch_name_display.clone()}
+                    </span>
+
+                    // Live status indicator
+                    {move || {
+                        let updates = title_updates.get();
+                        if let Some(title) = updates.get(&branch_id_for_status) {
+                            if title.contains("Generating") || title.contains("...") {
+                                view! {
+                                    <div class="animate-pulse text-mint-500 dark:text-mint-400">
+                                        <Icon icon=icondata_bs::BsStars width="12" height="12"/>
+                                    </div>
+                                }
+                                    .into_any()
+                            } else if !title.is_empty() && title != "New Thread" {
+                                view! {
+                                    <div class="text-seafoam-500 dark:text-mint-400">
+                                        <Icon
+                                            icon=icondata_bs::BsCheckCircleFill
+                                            width="12"
+                                            height="12"
+                                        />
+                                    </div>
+                                }
+                                    .into_any()
+                            } else {
+                                view! { <div></div> }.into_any()
+                            }
+                        } else {
+                            view! { <div></div> }.into_any()
+                        }
+                    }}
+
+                </div>
+
+                {move || {
+                    if is_current() {
+                        view! {
+                            <span class="text-xs px-2 py-1 bg-seafoam-200 dark:bg-mint-800 text-seafoam-800 dark:text-mint-200 rounded-full">
+                                "current"
+                            </span>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <div></div> }.into_any()
+                    }
+                }}
+
+            </div>
+
+            // Streaming title display
+            <div class="text-sm min-h-[20px]">
+                {move || {
+                    let updates = title_updates.get();
+                    if let Some(title) = updates.get(&branch_id_for_title) {
+                        let title_clone = title.clone();
+                        if title.contains("Generating") || title.contains("...") {
+                            view! {
+                                <div class="space-y-1">
+                                    <div class="text-xs text-mint-600 dark:text-mint-400 font-mono animate-pulse">
+                                        "🤖 generating title..."
+                                    </div>
+                                    <div class="text-xs text-mint-700 dark:text-mint-300 font-mono bg-mint-100 dark:bg-mint-900/50 p-2 rounded">
+                                        {title_clone}
+                                    </div>
+                                </div>
+                            }
+                                .into_any()
+                        } else if !title.is_empty() && title != "New Thread" {
+                            view! {
+                                <div class="text-gray-700 dark:text-gray-300 font-medium">
+                                    {title_clone}
+                                </div>
+                            }
+                                .into_any()
+                        } else {
+                            view! {
+                                <div class="text-gray-500 dark:text-gray-500 italic text-xs">
+                                    "No title yet..."
+                                </div>
+                            }
+                                .into_any()
+                        }
+                    } else {
+                        view! {
+                            <div class="text-gray-500 dark:text-gray-500 italic text-xs">
+                                "Title will generate after first message"
+                            </div>
+                        }
+                            .into_any()
+                    }
+                }}
+
+            </div>
+        </div>
+    }
 }
 
 #[server(GetMessagesForThread, "/api")]
