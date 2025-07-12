@@ -428,7 +428,7 @@ fn ThreadTreeNode(
         let updates = title_updates.get();
         let thread_id = thread_for_generation.id.as_str();
         
-        log::debug!("Checking if thread {} is generating title", thread_id);
+        log::warn!("Checking if thread {} is generating title", thread_id);
         
         if let Some(title) = updates.get(thread_id) {
             let is_generating = title.contains("Generating") || title.contains("...");

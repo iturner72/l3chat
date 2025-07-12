@@ -1,7 +1,8 @@
 use leptos::prelude::*;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq)]
 pub enum ButtonVariant {
+    #[default]
     Primary,
     Secondary,
     Outline,
@@ -10,10 +11,11 @@ pub enum ButtonVariant {
     Success,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq)]
 pub enum ButtonSize {
     Tiny,
     Small,
+    #[default]
     Medium,
     Large,
 }
@@ -194,17 +196,5 @@ pub fn LinkButton(
         <a class=combined_classes href=href target=target>
             {children()}
         </a>
-    }
-}
-
-impl Default for ButtonVariant {
-    fn default() -> Self {
-        ButtonVariant::Primary
-    }
-}
-
-impl Default for ButtonSize {
-    fn default() -> Self {
-        ButtonSize::Medium
     }
 }
