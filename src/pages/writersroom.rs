@@ -1,6 +1,7 @@
 use leptos::{prelude::*, task::spawn_local};
 use leptos_icons::Icon;
 use leptos_fetch::QueryClient;
+use server_fn::codec::PostUrl;
 use uuid::Uuid;
 
 use crate::components::auth_nav::AuthNav;
@@ -478,7 +479,11 @@ pub fn WritersRoom() -> impl IntoView {
     }
 }
 
-#[server(CreateThread, "/api")]
+#[server(
+    prefix = "/api",
+    endpoint = "new-thread",
+    input = PostUrl
+)]
 pub async fn create_thread() -> Result<String, ServerFnError> {
     use diesel_async::RunQueryDsl; 
     use crate::schema::threads;

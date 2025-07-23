@@ -410,7 +410,6 @@ fn ThreadTreeNode(
     let thread_id_for_set = thread_id.clone();
     let thread_id_for_delete = thread_id.clone();
     let thread_for_display = thread.clone();
-    let thread_for_generation = thread.clone();
     let thread_for_styles = thread.clone();
     let thread_for_title_display = thread.clone();
     let thread_for_highlight = thread.clone();
@@ -423,36 +422,28 @@ fn ThreadTreeNode(
     
     // Check if this thread should be highlighted (belongs to selected project)
     let should_highlight = Memo::new(move |_| is_highlighted(&thread_for_highlight));
+
+    let this_thread_title = Memo::new({
+        let thread_id = thread_id.clone();
+        move |_| {
+            title_updates.get().get(&thread_id).cloned()
+        }
+    });
     
     // Check if title is being generated
     let is_generating_title = Memo::new(move |_| {
-        let updates = title_updates.get();
-        let thread_id = thread_for_generation.id.as_str();
-        
-        log::warn!("Checking if thread {} is generating title", thread_id);
-        
-        if let Some(title) = updates.get(thread_id) {
-            let is_generating = title.contains("Generating") || title.contains("...");
-            log::debug!("Current title: '{}', is_generating: {}", title, is_generating);
-            is_generating
-        } else {
-            log::debug!("No title update found for thread");
-            false
-        }
+        this_thread_title.get()
+            .map(|title| title.contains("Generating") || title.contains("..."))
+            .unwrap_or(false)
     });
 
     // Get display title with SSE updates
     let display_title = Memo::new(move |_| {
-        let updates = title_updates.get();
-        let thread_id = thread_for_title_display.id.as_str();
-        
-        // Check if we have a live title update
-        if let Some(updated_title) = updates.get(thread_id) {
-            // Don't show "Generating..." messages as the actual title
+        if let Some(updated_title) = this_thread_title.get() {
             if updated_title.contains("Generating") {
                 thread_for_title_display.title.clone().unwrap_or_else(|| "New Thread".to_string())
             } else {
-                updated_title.clone()
+                updated_title
             }
         } else {
             thread_for_title_display.title.clone().unwrap_or_else(|| "New Thread".to_string())

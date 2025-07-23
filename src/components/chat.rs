@@ -2,6 +2,7 @@ use cfg_if::cfg_if;
 use leptos::{prelude::*, task::spawn_local};
 use log::{info, error};
 use serde::{Serialize, Deserialize};
+use server_fn::codec::PostUrl;
 use urlencoding;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -1441,7 +1442,11 @@ pub fn Chat(
     }.into_any()
 }
 
-#[server(CreateMessage, "/api")]
+#[server(
+    prefix = "/api",
+    endpoint = "new-message",
+    input = PostUrl, 
+)]
 pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> Result<(), ServerFnError> {
     use diesel::prelude::*;
     use diesel_async::{AsyncPgConnection, AsyncConnection, RunQueryDsl};
@@ -1649,7 +1654,11 @@ pub async fn create_message(new_message_view: NewMessageView, is_llm: bool) -> R
     Ok(())
 }
 
-#[server(CheckThreadExists, "/api")]
+#[server(
+    prefix = "/api",
+    endpoint = "check-thread-exists",
+    input = PostUrl,
+)]
 pub async fn check_thread_exists(thread_id: String) -> Result<bool, ServerFnError> {
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;
