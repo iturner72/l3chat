@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use leptos_fetch::QueryClient;
 use leptos_icons::Icon;
 use chrono::Utc;
+use server_fn::codec::GetUrl;
 use std::borrow::Cow;
 use uuid::Uuid;
 use wasm_bindgen::JsCast;
@@ -917,7 +918,11 @@ fn BranchCard(
     }
 }
 
-#[server(GetMessagesForThread, "/api")]
+#[server(
+    prefix = "/api",
+    endpoint = "messages",
+    input = GetUrl,
+)]
 pub async fn get_messages_for_thread(_thread_id: String) -> Result<Vec<MessageView>, ServerFnError> {
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl; 
@@ -1149,7 +1154,11 @@ pub async fn create_branch(
     Ok(result)
 }
 
-#[server(GetThreadBranches, "/api")]
+#[server(
+    prefix = "/api",
+    endpoint = "branches",
+    input = GetUrl,
+)]
 pub async fn get_thread_branches(thread_id: String) -> Result<Vec<BranchInfo>, ServerFnError> {
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;

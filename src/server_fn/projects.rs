@@ -1,5 +1,6 @@
 use cfg_if::cfg_if;
 use leptos::prelude::*;
+use server_fn::codec::GetUrl;
 use uuid::Uuid;
 
 #[cfg(feature = "ssr")]
@@ -110,7 +111,11 @@ pub async fn create_project(project_data: NewProjectView) -> Result<ProjectView,
     Ok(project.into())
 }
 
-#[server(GetUserProjects, "/api")]
+#[server(
+    prefix = "/api",
+    endpoint = "projects",
+    input = GetUrl,
+)]
 pub async fn get_user_projects() -> Result<Vec<ProjectView>, ServerFnError> {
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;

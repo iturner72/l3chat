@@ -1,5 +1,6 @@
 use leptos::{prelude::*, task::spawn_local};
 use leptos_icons::Icon;
+use server_fn::codec::GetUrl;
 use web_sys::window;
 
 use crate::components::ui::{IconButton, ButtonVariant};
@@ -33,7 +34,11 @@ pub async fn set_dark_mode_cookie(is_dark: bool) -> Result<(), ServerFnError> {
     Ok(())
 }
 
-#[server(GetDarkModeCookie, "/api")]
+#[server(
+    prefix = "/api",
+    endpoint = "darkmode",
+    input = GetUrl,
+)]
 pub async fn get_dark_mode_cookie() -> Result<Option<bool>, ServerFnError> {
     use crate::auth::{AuthError, to_server_error};
     use leptos_axum::extract;

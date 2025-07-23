@@ -9,6 +9,7 @@ pub mod server;
 mod types;
 
 pub use auth_components::*;
+use leptos::server_fn::codec::GetUrl;
 pub use types::*;
 
 #[cfg(feature = "ssr")]
@@ -65,7 +66,11 @@ pub fn verify_jwt_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Err
     Ok(token_data.claims)
 }
 
-#[leptos::server(VerifyToken, "/api")]
+#[leptos::server(
+    prefix = "/api",
+    endpoint = "token",
+    input = GetUrl,
+)]
 pub async fn verify_token() -> Result<bool, leptos::server_fn::ServerFnError> {
     #[cfg(feature = "ssr")]
     {
@@ -86,7 +91,11 @@ pub async fn verify_token() -> Result<bool, leptos::server_fn::ServerFnError> {
     }
 }
 
-#[leptos::server(GetCurrentUser, "/api")]
+#[leptos::server(
+    prefix = "/api",
+    endpoint = "me",
+    input = GetUrl,
+)]
 pub async fn get_current_user() -> Result<Option<crate::models::users::UserView>, leptos::server_fn::ServerFnError> {
     #[cfg(feature = "ssr")]
     {

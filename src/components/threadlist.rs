@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use leptos_icons::Icon;
 use leptos_fetch::QueryClient;
 use log::error;
+use server_fn::codec::GetUrl;
 use web_sys::Event;
 use cfg_if::cfg_if;
 use uuid::Uuid;
@@ -1101,7 +1102,11 @@ pub async fn delete_thread(thread_id: String) -> Result<(), ServerFnError> {
     Ok(())
 }
 
-#[server(GetThreads, "/api")]
+#[server(
+    prefix = "/api",
+    endpoint = "threads",
+    input = GetUrl,
+)]
 pub async fn get_threads() -> Result<Vec<ThreadView>, ServerFnError> {
     use chrono::DateTime;
     use diesel::prelude::*;
@@ -1194,7 +1199,11 @@ pub async fn get_threads() -> Result<Vec<ThreadView>, ServerFnError> {
     Ok(threads)
 }
 
-#[server(GetThreadBranches, "/api")]
+#[server(
+    prefix = "/api",
+    endpoint = "branches",
+    input = GetUrl,
+)]
 pub async fn get_thread_branches(thread_id: String) -> Result<Vec<crate::models::conversations::BranchInfo>, ServerFnError> {
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;
