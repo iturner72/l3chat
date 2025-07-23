@@ -27,7 +27,6 @@ pub struct ThreadContext {
     pub set_message_refetch_trigger: WriteSignal<i32>,
     pub set_pending_messages: WriteSignal<Vec<PendingMessage>>,
     pub set_search_term: WriteSignal<String>,
-    pub title_updates: ReadSignal<std::collections::HashMap<String, String>>,
 }
 
 #[component]
@@ -43,117 +42,16 @@ pub fn WritersRoom() -> impl IntoView {
     let (search_term, set_search_term) = signal(String::new());
     let (search_action, set_search_action) = signal(false);
     let (pending_messages, set_pending_messages) = signal(Vec::<PendingMessage>::new());
-
-    // title updates - the core signal which powers everything
-    let (title_updates, set_title_updates) = signal(std::collections::HashMap::<String, String>::new());
-    let (sse_connected, set_sse_connected) = signal(false);
-
-    // floating notifications for completed titles
-    let (recent_title_updates, set_recent_title_updates) = signal(Vec::<TitleNotification>::new());
     
     // Project selection state - this is the key addition
     let (selected_project, set_selected_project) = signal(None::<Uuid>);
     let (_available_projects, set_available_projects) = signal(Vec::<ProjectView>::new());
-
-    cfg_if::cfg_if! {
-        if #[cfg(feature = "hydrate")] {
-            Effect::new(move |_| {
-                use wasm_bindgen_futures::spawn_local;
-                use web_sys::{EventSource, MessageEvent, ErrorEvent};
-                use wasm_bindgen::{prelude::*, JsCast};
-                use crate::types::TitleUpdate;
-
-                spawn_local(async move {
-                    log::debug!("Setting up SSE connection for title updates");
-                    
-                    match EventSource::new("/api/title-updates") {
-                        Ok(event_source) => {
-                            set_sse_connected.set(true);
-                            
-                            let onmessage_callback = Closure::wrap(Box::new(move |e: MessageEvent| {
-                                if let Some(data) = e.data().as_string() {
-                                    log::debug!("Received SSE message: {}", data);
-                                    
-                                    if let Ok(title_update) = serde_json::from_str::<TitleUpdate>(&data) {
-                                        // this single update will trigger ALL UI location
-                                        // simultaneously
-                                        set_title_updates.update(|updates| {
-                                            updates.insert(title_update.thread_id.clone(), title_update.title.clone());
-                                        });
-                                    }
-                                }
-                            }) as Box<dyn FnMut(_)>);
-                            
-                            event_source.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
-                            onmessage_callback.forget();
-                            
-                            let onerror_callback = Closure::wrap(Box::new(move |_: ErrorEvent| {
-                                log::error!("SSE connection error for title updates");
-                                set_sse_connected.set(false);
-                            }) as Box<dyn FnMut(_)>);
-                            
-                            event_source.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
-                            onerror_callback.forget();
-                        }
-                        Err(e) => {
-                            log::error!("Failed to create EventSource: {:?}", e);
-                        }
-                    }
-                });
-            });
-        }
-    }
-
-    // monitor title_updates for completed titles and create floating notifications
-    Effect::new(move |_| {
-        let updates = title_updates.get();
-
-        for (thread_id, title) in updates.iter() {
-            // only notify for completed titles (not generating ones)
-            if !title.contains("Generating") && !title.contains("...") && !title.is_empty() && title != "New Thread" {
-                // check if we already notified about this exact title
-                let already_notified = recent_title_updates.get()
-                    .iter()
-                    .any(|notif| &notif.thread_id == thread_id && &notif.title == title);
-
-                if !already_notified {
-                    let notification = TitleNotification {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        thread_id: thread_id.clone(),
-                        title: title.clone(),
-                        created_at: chrono::Utc::now(),
-                    };
-
-                    let notif_id = notification.id.clone();
-
-                    set_recent_title_updates.update(|notifications| {
-                        notifications.push(notification);
-                        // keep only the last 3 notifications
-                        if notifications.len() > 3 {
-                            notifications.remove(0);
-                        }
-                    });
-
-                    // auto-remove notification after 4 seconds
-                    set_timeout(
-                        move || {
-                            set_recent_title_updates.update(|notifications| {
-                                notifications.retain(|n| n.id != notif_id);
-                            });
-                        },
-                        std::time::Duration::from_secs(4)
-                    );
-                }
-            }
-        }
-    });
 
     let thread_context = ThreadContext {
         set_thread_id,
         set_message_refetch_trigger,
         set_pending_messages,
         set_search_term,
-        title_updates,
     };
     provide_context(thread_context);
 
@@ -251,27 +149,6 @@ pub fn WritersRoom() -> impl IntoView {
             <div class="flex-shrink-0 p-2 border-b border-gray-400 dark:border-teal-700">
                 <div class="flex flex-row items-center justify-between">
                     <div class="flex flex-row items-center justify-center space-x-2">
-                        {move || {
-                            let current_thread = thread_id.get();
-                            let updates = title_updates.get();
-                            if let Some(title_update) = updates.get(&current_thread) {
-                                if title_update.contains("Generating")
-                                    || title_update.contains("...")
-                                {
-                                    view! {
-                                        <div class="hidden md:flex items-center px-3 py-1 bg-mint-200 darg:bg-mint-800 text-mint-800 dark:text-mint-200 rounded text-xs animate-pulse">
-                                            <Icon icon=icondata_bs::BsStars width="12" height="12"/>
-                                            <span class="ml-1">"AI thinking..."</span>
-                                        </div>
-                                    }
-                                        .into_any()
-                                } else {
-                                    view! { <div></div> }.into_any()
-                                }
-                            } else {
-                                view! { <div></div> }.into_any()
-                            }
-                        }}
                         // Mobile: Show hamburger menu for threads
                         <button
                             class="md:hidden text-xs text-teal-700 dark:text-teal-100 hover:text-gray-800 dark:hover:text-gray-200 
@@ -290,8 +167,9 @@ pub fn WritersRoom() -> impl IntoView {
                                 height="16"
                                 style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
                             />
-                        // Mobile: Projects toggle
                         </button>
+
+                        // Mobile: Projects toggle
                         <button
                             class="md:hidden text-xs text-teal-700 dark:text-teal-100 hover:text-gray-800 dark:hover:text-gray-200 
                             px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
@@ -309,8 +187,9 @@ pub fn WritersRoom() -> impl IntoView {
                                 height="16"
                                 style="filter: brightness(0) saturate(100%) invert(36%) sepia(42%) saturate(1617%) hue-rotate(154deg) brightness(94%) contrast(89%);"
                             />
-                        // Desktop: Original threads toggle
                         </button>
+
+                        // Desktop: Original threads toggle
                         <button
                             class="hidden md:block text-xs md:text-sm text-teal-700 dark:text-teal-100 hover:text-gray-800 dark:hover:text-gray-200 
                             px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
@@ -341,6 +220,7 @@ pub fn WritersRoom() -> impl IntoView {
                             }}
 
                         </button>
+
                         <button
                             class="text-xs md:text-sm text-teal-700 dark:text-teal-100 hover:text-teal-600 dark:hover:text-teal-200 
                             px-3 py-2 bg-gray-400 dark:bg-teal-700 hover:bg-gray-500 dark:hover:bg-teal-600 
@@ -376,8 +256,9 @@ pub fn WritersRoom() -> impl IntoView {
                                 }}
 
                             </span>
-                        // Search indicator - hide on very small screens
                         </button>
+
+                        // Search indicator - hide on very small screens
                         <div class="hidden sm:block">
                             {move || {
                                 let term = search_term.get();
@@ -519,7 +400,6 @@ pub fn WritersRoom() -> impl IntoView {
                                 pending_messages=pending_messages
                                 search_term=search_term
                                 search_action=search_action
-                                title_updates=title_updates
                             />
                         </div>
                     </div>
@@ -589,56 +469,6 @@ pub fn WritersRoom() -> impl IntoView {
                 </div>
             </div>
 
-            // floating title notifications - shows completed titles
-            <div class="fixed top-20 right-4 z-50 space-y-2 pointer-events-none">
-                <For
-                    each=move || recent_title_updates.get()
-                    key=|notif| notif.id.clone()
-                    children=move |notification| {
-                        view! {
-                            <div class="pointer-events-auto bg-white dark:bg-teal-800 border border-gray-300 dark:border-teal-600 rounded-lg shadow-lg p-3 max-w-sm transform transition-all duration-300 hover:scale-105">
-                                <div class="flex items-start gap-2">
-                                    <div class="text-seafoam-500 dark:text-mint-400 mt-0.5">
-                                        <Icon
-                                            icon=icondata_bs::BsLightbulbFill
-                                            width="16"
-                                            height="16"
-                                        />
-                                    </div>
-                                    <div class="flex-1 min-w-0">
-                                        <div class="text-xs text-gray-600 dark:text-gray-400 mb-1">
-                                            "✨ Title generated"
-                                        </div>
-                                        <div class="text-sm font-medium text-gray-800 dark:text-gray-200 break-words">
-                                            {notification.title.clone()}
-                                        </div>
-                                        <div class="text-xs text-gray-500 dark:text-gray-500 mt-1">
-                                            "Thread: "
-                                            {notification.thread_id.chars().take(8).collect::<String>()}
-                                            "..."
-                                        </div>
-                                    </div>
-                                    <button
-                                        class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs"
-                                        on:click=move |_| {
-                                            let notif_id = notification.id.clone();
-                                            set_recent_title_updates
-                                                .update(|notifications| {
-                                                    notifications.retain(|n| n.id != notif_id);
-                                                });
-                                        }
-                                    >
-
-                                        "×"
-                                    </button>
-                                </div>
-                            </div>
-                        }
-                    }
-                />
-
-            </div>
-
             <Toast
                 message=toast_message
                 visible=toast_visible
@@ -646,14 +476,6 @@ pub fn WritersRoom() -> impl IntoView {
             />
         </div>
     }
-}
-
-#[derive(Clone, Debug)]
-struct TitleNotification {
-    id: String,
-    thread_id: String,
-    title: String,
-    created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[server(CreateThread, "/api")]
